@@ -243,25 +243,22 @@ def main_menu():
     return InlineKeyboardMarkup([
         [B("👤 پروفایل / موجودی", "profile", "primary")],
         [
-            B("🏦 بانک", "bank", "primary"),
+            B("🛒 فروشگاه", "shop", "primary"),
             B("🏠 کسب درآمد", "income", "primary"),
         ],
         [
+            B("🏦 بانک", "bank", "primary"),
             B("📈 ترید", "trade", "primary"),
-            B("🏁 مسابقه / ماشین‌ها", "cars", "primary"),
         ],
         [
             B("💱 صرافی رمزارز", "crypto", "primary"),
-            B("📦 انبار و فروش", "inventory", "primary"),
-        ],
-        [
-            B("🛒 فروشگاه", "shop", "primary"),
-            B("🐾 پت و لوازم", "pets", "primary"),
+            B("🏁 مسابقه / ماشین‌ها", "cars", "primary"),
         ],
         [
             B("🏴 بازار سیاه", "black_market", "primary"),
-            B("🕸️ دارک وب", "dark_web", "primary"),
+            B("📦 انبار و فروش", "inventory", "primary"),
         ],
+        [B("🕸️ دارک وب", "dark_web", "primary")],
         [B("🏳️ کلن", "clan", "primary")],
         [B("❓ راهنما", "help", "primary")],
         [B("➕ افزودن ربات به گروه", "add_group", "success")],
