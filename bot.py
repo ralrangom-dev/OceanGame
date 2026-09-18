@@ -130,7 +130,58 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🏦 بانک: $ {p['bank']:,}"
         )
     elif data == "income":
-        text = "🏠 کسب درآمد\n\nفعالیت‌های درآمدی بازی در این بخش قرار می‌گیرند."
+        text = (
+            "🏠 کسب درآمد\n\n"
+            "روی هر مورد بزن تا جزئیاتشو ببینی.\n"
+            "درآمد جمع شده: 💵 0 $"
+        )
+        income_keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🏪 سوپرمارکت — +8,000/۵س", callback_data="income_supermarket")],
+            [InlineKeyboardButton("🍽️ رستوران — +16,000/۵س", callback_data="income_restaurant")],
+            [InlineKeyboardButton("🥖 نانوایی — +28,000/۵س", callback_data="income_bakery")],
+            [InlineKeyboardButton("🌾 مزرعه آرد — +48,000/۵س", callback_data="income_flour_farm")],
+            [InlineKeyboardButton("🏭 کارخانه — +74,000/۵س", callback_data="income_factory")],
+            [InlineKeyboardButton("🚫 جنده‌خونه — +105,000/۵س", callback_data="income_brothel")],
+            [InlineKeyboardButton("⛏️ معدن آهن — +150,000/۵س", callback_data="income_iron_mine")],
+            [InlineKeyboardButton("⭐ مزرعه تریاک — +220,000/۵س", callback_data="income_opium_farm")],
+            [InlineKeyboardButton("🥙 فلافلی — +300,000/۵س Ocean", callback_data="income_falafel")],
+            [InlineKeyboardButton("🍗 اکبر جوجه — +420,000/۵س", callback_data="income_akbar_jojeh")],
+            [InlineKeyboardButton("💰 برداشت درآمد (0)", callback_data="income_collect")],
+            [InlineKeyboardButton("🔙 برگشت", callback_data="home")],
+        ])
+        await q.edit_message_text(text, reply_markup=income_keyboard)
+        return
+    elif data.startswith("income_"):
+        income_details = {
+            "income_supermarket": ("🏪 سوپرمارکت", 8000),
+            "income_restaurant": ("🍽️ رستوران", 16000),
+            "income_bakery": ("🥖 نانوایی", 28000),
+            "income_flour_farm": ("🌾 مزرعه آرد", 48000),
+            "income_factory": ("🏭 کارخانه", 74000),
+            "income_brothel": ("🚫 جنده‌خونه", 105000),
+            "income_iron_mine": ("⛏️ معدن آهن", 150000),
+            "income_opium_farm": ("⭐ مزرعه تریاک", 220000),
+            "income_falafel": ("🥙 فلافلی", 300000),
+            "income_akbar_jojeh": ("🍗 اکبر جوجه", 420000),
+        }
+        if data in income_details:
+            name, amount = income_details[data]
+            text = (
+                f"{name}\n\n"
+                f"💵 درآمد: +{amount:,} $ در هر ۵ ثانیه\n\n"
+                "برای دیدن وضعیت کسب درآمد، به منوی کسب درآمد برگرد."
+            )
+        elif data == "income_collect":
+            text = "💰 برداشت درآمد\n\nفعلاً درآمد قابل برداشت: 0 $"
+        else:
+            text = "❌ این گزینه پیدا نشد."
+        await q.edit_message_text(
+            text,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 برگشت به کسب درآمد", callback_data="income")]
+            ])
+        )
+        return
     elif data == "trade":
         text = "📈 ترید\n\nبازار ترید OceanGame در حال ساخت است."
     elif data == "cars":
@@ -140,7 +191,29 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "inventory":
         text = "📦 انبار و فروش\n\nدارایی‌ها و فروش آیتم‌ها در این بخش قرار می‌گیرد."
     elif data == "shop":
-        text = "🛒 فروشگاه\n\nفروشگاه OceanGame در حال ساخت است."
+        text = "🛒 فروشگاه\n\nچی میخوای بخری؟"
+        shop_keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🐾 پت", callback_data="shop_pet")],
+            [InlineKeyboardButton("🚘 وسیله نقلیه", callback_data="shop_vehicle")],
+            [InlineKeyboardButton("🍼 لوازم بچه", callback_data="shop_baby")],
+            [InlineKeyboardButton("🔙 برگشت", callback_data="home")],
+        ])
+        await q.edit_message_text(text, reply_markup=shop_keyboard)
+        return
+    elif data in ("shop_pet", "shop_vehicle", "shop_baby"):
+        titles = {
+            "shop_pet": "🐾 پت",
+            "shop_vehicle": "🚘 وسیله نقلیه",
+            "shop_baby": "🍼 لوازم بچه",
+        }
+        text = f"{titles[data]}\n\nاین بخش در مرحله بعد تکمیل می‌شود."
+        await q.edit_message_text(
+            text,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 برگشت به فروشگاه", callback_data="shop")]
+            ])
+        )
+        return
     elif data == "pets":
         text = "🐾 پت و لوازم\n\nپت‌ها و لوازم جانبی در این بخش قرار می‌گیرند."
     elif data == "black_market":
