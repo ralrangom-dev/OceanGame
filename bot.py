@@ -586,13 +586,13 @@ def run_trade(user_id, amount):
             "UPDATE players SET coins=coins+? WHERE user_id=?",
             (result, user_id)
         )
-        message = f"📈 برنده شدی!\n💵 سود: +{result:,} $"
+        message = f"📈 سود کردی! +{result:,}"
     else:
         conn.execute(
             "UPDATE players SET coins=coins-? WHERE user_id=?",
             (amount, user_id)
         )
-        message = f"📉 باختی.\n💸 ضرر: -{amount:,} $"
+        message = f"📉 باختی! -{amount:,}"
 
     conn.commit()
     conn.close()
