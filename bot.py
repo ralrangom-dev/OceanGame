@@ -1331,6 +1331,92 @@ def parse_crypto_name(value):
     return None
 
 
+
+def rob_replied_user(thief_user, target_user):
+    """Steal 10% of the replied user's cash; 70% success / 30% caught."""
+    if not target_user:
+        return "❌ باید روی پیام یک کاربر ریپلای کنی و بنویسی: دزدی"
+
+    if thief_user.id == target_user.id:
+        return "❌ نمی‌تونی از خودت دزدی کنی."
+
+    conn = db()
+    try:
+        thief = conn.execute(
+            "SELECT coins, name FROM players WHERE user_id=?",
+            (thief_user.id,)
+        ).fetchone()
+        target = conn.execute(
+            "SELECT coins, name FROM players WHERE user_id=?",
+            (target_user.id,)
+        ).fetchone()
+
+        if thief is None:
+            conn.execute(
+                """
+                INSERT INTO players(
+                    user_id, name, coins, bank, level,
+                    bank_profit, bank_last_day, created_at
+                ) VALUES(?,?,?,?,?,?,?,?)
+                """,
+                (thief_user.id, thief_user.first_name or "بازیکن", 0, 0, 1, 0,
+                 int(time.time() // 86400), int(time.time()))
+            )
+            thief = conn.execute(
+                "SELECT coins, name FROM players WHERE user_id=?",
+                (thief_user.id,)
+            ).fetchone()
+
+        if target is None:
+            conn.execute(
+                """
+                INSERT INTO players(
+                    user_id, name, coins, bank, level,
+                    bank_profit, bank_last_day, created_at
+                ) VALUES(?,?,?,?,?,?,?,?)
+                """,
+                (target_user.id, target_user.first_name or "بازیکن", 0, 0, 1, 0,
+                 int(time.time() // 86400), int(time.time()))
+            )
+            target = conn.execute(
+                "SELECT coins, name FROM players WHERE user_id=?",
+                (target_user.id,)
+            ).fetchone()
+
+        thief_name = thief["name"]
+        target_name = target["name"]
+        thief_coins = int(thief["coins"])
+        target_coins = int(target["coins"])
+
+        if target_coins <= 0:
+            conn.commit()
+            return f"❌ {target_name} موجودی نقدی ندارد."
+
+        if random.random() < 0.70:
+            stolen = max(1, int(target_coins * 0.10))
+            conn.execute(
+                "UPDATE players SET coins=coins-? WHERE user_id=?",
+                (stolen, target_user.id)
+            )
+            conn.execute(
+                "UPDATE players SET coins=coins+? WHERE user_id=?",
+                (stolen, thief_user.id)
+            )
+            conn.commit()
+            return f"🤑 {thief_name} موقع دزدیدن از {target_name} موفق شد و ${stolen:,} دزدید!"
+
+        fine = min(max(10, int(thief_coins * 0.10)), thief_coins)
+        if fine > 0:
+            conn.execute(
+                "UPDATE players SET coins=coins-? WHERE user_id=?",
+                (fine, thief_user.id)
+            )
+        conn.commit()
+        return f"🚓 گیر {thief_name} موقع دزدیدن از {target_name} ! ${fine:,} جریمه افتاد و"
+    finally:
+        conn.close()
+
+
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
         return
@@ -1342,6 +1428,12 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text in {"منو", "مانی", "/menu"}:
         # متن «منو» دقیقاً همان عملکرد /start را اجرا می‌کند.
         await start(update, context)
+        return
+
+    if text == "دزدی":
+        replied = update.message.reply_to_message
+        target_user = replied.from_user if replied and replied.from_user else None
+        await update.message.reply_text(rob_replied_user(user, target_user))
         return
 
     if text in {"کسب درآمد", "کسب درآمدها"}:
