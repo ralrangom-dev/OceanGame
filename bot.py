@@ -66,6 +66,19 @@ def init_db():
         )
     """)
 
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS income_businesses (
+            user_id INTEGER NOT NULL,
+            business_id TEXT NOT NULL,
+            business_name TEXT NOT NULL,
+            price INTEGER NOT NULL,
+            income INTEGER NOT NULL,
+            quantity INTEGER NOT NULL DEFAULT 0,
+            last_income INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (user_id, business_id)
+        )
+    """)
+
     # Upgrade older OceanGame databases without deleting player data.
     columns = {row["name"] for row in conn.execute("PRAGMA table_info(players)").fetchall()}
     if "bank_profit" not in columns:
@@ -351,34 +364,175 @@ def withdraw_bank(user_id):
 
 # -------------------- Income --------------------
 
+# کسب‌وکارهای بخش «کسب درآمد» مطابق نمونه‌ای که کاربر فرستاد.
+# درآمد پایه هر ۵ ساعت است و خریدها داخل SQLite ذخیره می‌شوند.
 INCOME_ITEMS = [
-    ("income_supermarket", "🏪 سوپرمارکت", 8000),
-    ("income_restaurant", "🍽️ رستوران", 16000),
-    ("income_bakery", "🥖 نانوایی", 28000),
-    ("income_flour_farm", "🌾 مزرعه آرد", 48000),
-    ("income_factory", "🏭 کارخانه", 74000),
-    ("income_brothel", "🚫 جنده‌خونه", 105000),
-    ("income_iron_mine", "⛏️ معدن آهن", 150000),
-    ("income_opium_farm", "⭐ مزرعه تریاک", 220000),
-    ("income_falafel", "🥙 فلافلی", 300000),
-    ("income_akbar_jojeh", "🍗 اکبر جوجه", 420000),
+    ("income_supermarket", "🏪 سوپرمارکت", 200000, 8000),
+    ("income_restaurant", "🍽️ رستوران", 400000, 16000),
+    ("income_bakery", "🥖 نانوایی", 700000, 28000),
+    ("income_flour_farm", "🌾 مزرعه آرد", 1200000, 48000),
+    ("income_factory", "🏭 کارخانه", 1800000, 74000),
+    ("income_brothel", "🚫 جنده‌خونه", 2500000, 105000),
+    ("income_iron_mine", "⛏️ معدن آهن", 3500000, 150000),
+    ("income_opium_farm", "⭐ مزرعه تریاک", 5000000, 220000),
+    ("income_falafel", "🥙 فلافلی Ocean", 7000000, 300000),
+    ("income_akbar_jojeh", "🍗 اکبر جوجه", 13000000, 420000),
 ]
+INCOME_PERIOD = 5 * 60 * 60
+INCOME_CAPACITY = 9
+
+
+def income_row(user_id, business_id):
+    conn = db()
+    row = conn.execute(
+        "SELECT * FROM income_businesses WHERE user_id=? AND business_id=?",
+        (user_id, business_id),
+    ).fetchone()
+    conn.close()
+    return row
+
+
+def income_owned_count(user_id):
+    conn = db()
+    row = conn.execute(
+        "SELECT COALESCE(SUM(quantity),0) AS total FROM income_businesses WHERE user_id=?",
+        (user_id,),
+    ).fetchone()
+    conn.close()
+    return int(row["total"] or 0)
+
+
+def income_collectable(user_id):
+    now = int(time.time())
+    total = 0
+    conn = db()
+    rows = conn.execute(
+        "SELECT quantity,income,last_income FROM income_businesses WHERE user_id=? AND quantity>0",
+        (user_id,),
+    ).fetchall()
+    for row in rows:
+        last = int(row["last_income"] or now)
+        periods = max(0, (now - last) // INCOME_PERIOD)
+        total += periods * int(row["income"]) * int(row["quantity"])
+    conn.close()
+    return total
+
+
+def income_collect(user_id):
+    now = int(time.time())
+    total = 0
+    conn = db()
+    rows = conn.execute(
+        "SELECT business_id,quantity,income,last_income FROM income_businesses WHERE user_id=? AND quantity>0",
+        (user_id,),
+    ).fetchall()
+    for row in rows:
+        last = int(row["last_income"] or now)
+        periods = max(0, (now - last) // INCOME_PERIOD)
+        if periods:
+            total += periods * int(row["income"]) * int(row["quantity"])
+            new_last = last + periods * INCOME_PERIOD
+            conn.execute(
+                "UPDATE income_businesses SET last_income=? WHERE user_id=? AND business_id=?",
+                (new_last, user_id, row["business_id"]),
+            )
+    if total:
+        conn.execute(
+            "UPDATE players SET coins=coins+? WHERE user_id=?",
+            (total, user_id),
+        )
+    conn.commit()
+    conn.close()
+    return total
+
+
+def income_text(user_id):
+    owned = income_owned_count(user_id)
+    pending = income_collectable(user_id)
+    return (
+        "🏠 کسب درآمد\n\n"
+        f"📦 تعداد کسب‌وکارهای تو: {owned} (ظرفیت {INCOME_CAPACITY})\n"
+        f"💵 درآمد قابل برداشت: $ {pending:,}\n\n"
+        "روی هر کسب‌وکار بزن تا جزئیاتش رو ببینی."
+    )
 
 
 def income_keyboard():
     rows = []
-    for key, title, amount in INCOME_ITEMS:
+    for key, title, price, income in INCOME_ITEMS:
         rows.append([
-            B(
-                f"{title} — +{amount:,}/۵س",
-                callback_data=key
-            )
+            B(f"{title} — {price:,} $", key, "primary")
         ])
-    rows += [
-        [B("💰 برداشت درآمد (0)", callback_data="income_collect")],
-        [B("🔙 برگشت", callback_data="home")],
-    ]
+    rows.append([B("💰 برداشت درآمد", "income_collect", "success")])
+    rows.append([B("🔙 برگشت", "home", "primary")])
     return InlineKeyboardMarkup(rows)
+
+
+def income_detail_keyboard(business_id, can_buy=True):
+    rows = []
+    if can_buy:
+        item = next(x for x in INCOME_ITEMS if x[0] == business_id)
+        rows.append([B(f"💠 خرید ({item[2]:,})", f"income_buy:{business_id}", "success")])
+    rows.append([B("برگشت 🔙", "income", "primary")])
+    return InlineKeyboardMarkup(rows)
+
+
+def income_detail_text(user_id, business_id):
+    item = next((x for x in INCOME_ITEMS if x[0] == business_id), None)
+    if not item:
+        return "❌ این کسب‌وکار پیدا نشد."
+    _, name, price, income = item
+    row = income_row(user_id, business_id)
+    quantity = int(row["quantity"]) if row else 0
+    return (
+        f"{name}\n\n"
+        f"💵 قیمت خرید: $ {price:,}\n"
+        f"📈 درآمد پایه هر ۵ ساعت (هر واحد): $ {income:,}\n"
+        f"📦 تعداد شما: {quantity} (ظرفیت {INCOME_CAPACITY})\n"
+        f"🧮 مجموع درآمد هر ۵ ساعت: $ {income * quantity:,}\n"
+        f"💰 درآمد قابل برداشت: $ {income_collectable(user_id):,}"
+    )
+
+
+def buy_income_business(user_id, business_id):
+    item = next((x for x in INCOME_ITEMS if x[0] == business_id), None)
+    if not item:
+        return "❌ این کسب‌وکار پیدا نشد."
+    _, name, price, income = item
+    conn = db()
+    player = conn.execute(
+        "SELECT coins FROM players WHERE user_id=?", (user_id,)
+    ).fetchone()
+    if not player:
+        conn.close()
+        return "❌ بازیکن پیدا نشد."
+    row = conn.execute(
+        "SELECT quantity FROM income_businesses WHERE user_id=? AND business_id=?",
+        (user_id, business_id),
+    ).fetchone()
+    quantity = int(row["quantity"]) if row else 0
+    if quantity >= INCOME_CAPACITY:
+        conn.close()
+        return f"❌ ظرفیت این کسب‌وکار پر است. ظرفیت: {INCOME_CAPACITY}"
+    if int(player["coins"]) < price:
+        conn.close()
+        return f"❌ موجودی کافی نیست.\n💵 قیمت: $ {price:,}"
+
+    now = int(time.time())
+    conn.execute("UPDATE players SET coins=coins-? WHERE user_id=?", (price, user_id))
+    if row:
+        conn.execute(
+            "UPDATE income_businesses SET quantity=quantity+1, last_income=? WHERE user_id=? AND business_id=?",
+            (now, user_id, business_id),
+        )
+    else:
+        conn.execute(
+            "INSERT INTO income_businesses(user_id,business_id,business_name,price,income,quantity,last_income) VALUES(?,?,?,?,?,?,?)",
+            (user_id, business_id, name, price, income, 1, now),
+        )
+    conn.commit()
+    conn.close()
+    return f"✅ {name} خریداری شد.\n💸 پرداخت: $ {price:,}\n📈 درآمد هر ۵ ساعت: $ {income:,}"
 
 
 # -------------------- Trade --------------------
@@ -843,33 +997,49 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "income":
         await q.edit_message_text(
-            "🏠 کسب درآمد\n\n"
-            "روی هر مورد بزن تا جزئیاتشو ببینی.\n"
-            "درآمد جمع شده: 💵 0 $",
+            income_text(user.id),
             reply_markup=income_keyboard()
         )
         return
 
-    if data.startswith("income_"):
-        if data == "income_collect":
-            text = "💰 برداشت درآمد\n\nفعلاً درآمد قابل برداشت: 0 $"
+    if data == "income_collect":
+        amount = income_collect(user.id)
+        if amount:
+            message = f"✅ درآمد برداشت شد.\n💰 مبلغ دریافتی: $ {amount:,}"
         else:
-            item = next((x for x in INCOME_ITEMS if x[0] == data), None)
-            if item:
-                _, name, amount = item
-                text = (
-                    f"{name}\n\n"
-                    f"💵 درآمد: +{amount:,} $ در هر ۵ ثانیه\n\n"
-                    "برای دیدن وضعیت کسب درآمد، به منوی کسب درآمد برگرد."
-                )
-            else:
-                text = "❌ این گزینه پیدا نشد."
+            message = "ℹ️ فعلاً درآمدی برای برداشت آماده نیست.\n⏱️ هر ۵ ساعت درآمد جدید محاسبه می‌شود."
+        await q.answer(message, show_alert=True)
         await q.edit_message_text(
-            text,
-            reply_markup=InlineKeyboardMarkup([
-                [B("🔙 برگشت به کسب درآمد", callback_data="income")]
-            ])
+            income_text(user.id),
+            reply_markup=income_keyboard()
         )
+        return
+
+    if data.startswith("income_buy:"):
+        business_id = data.split(":", 1)[1]
+        message = buy_income_business(user.id, business_id)
+        await q.answer(message, show_alert=True)
+        await q.edit_message_text(
+            income_detail_text(user.id, business_id),
+            reply_markup=income_detail_keyboard(
+                business_id,
+                income_owned_count(user.id) < INCOME_CAPACITY
+            )
+        )
+        return
+
+    if data.startswith("income_"):
+        business_id = data
+        if any(x[0] == business_id for x in INCOME_ITEMS):
+            await q.edit_message_text(
+                income_detail_text(user.id, business_id),
+                reply_markup=income_detail_keyboard(
+                    business_id,
+                    income_owned_count(user.id) < INCOME_CAPACITY
+                )
+            )
+        else:
+            await q.answer("❌ این گزینه پیدا نشد.", show_alert=True)
         return
 
     if data == "trade":
@@ -1084,6 +1254,13 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             home_text(user),
             reply_markup=main_menu()
+        )
+        return
+
+    if text in {"کسب درآمد", "کسب درآمدها"}:
+        await update.message.reply_text(
+            income_text(user.id),
+            reply_markup=income_keyboard()
         )
         return
 
