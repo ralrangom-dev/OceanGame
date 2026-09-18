@@ -50,33 +50,30 @@ def get_player(user):
 
 
 def main_menu():
-    # Inline buttons: Telegram controls their visual style.
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("👤 پروفایل / موجودی", callback_data="profile")],
         [
-            InlineKeyboardButton("🏦 بانک", callback_data="bank"),
             InlineKeyboardButton("🏠 کسب درآمد", callback_data="income"),
+            InlineKeyboardButton("🛒 فروشگاه", callback_data="shop"),
         ],
         [
+            InlineKeyboardButton("🏦 بانک", callback_data="bank"),
             InlineKeyboardButton("📈 ترید", callback_data="trade"),
+        ],
+        [
+            InlineKeyboardButton("💱 صرافی رمز ارز", callback_data="crypto"),
             InlineKeyboardButton("🏁 مسابقه / ماشین‌ها", callback_data="cars"),
         ],
         [
-            InlineKeyboardButton("💱 صرافی رمزارز", callback_data="crypto"),
             InlineKeyboardButton("📦 انبار و فروش", callback_data="inventory"),
-        ],
-        [
-            InlineKeyboardButton("🛒 فروشگاه", callback_data="shop"),
-            InlineKeyboardButton("🐾 پت و لوازم", callback_data="pets"),
-        ],
-        [
             InlineKeyboardButton("🏴 بازار سیاه", callback_data="black_market"),
-            InlineKeyboardButton("🕸 دارک وب", callback_data="dark_web"),
         ],
+        [InlineKeyboardButton("🕸 دارک وب", callback_data="dark_web")],
         [InlineKeyboardButton("🏳️ کلن", callback_data="clan")],
         [InlineKeyboardButton("❓ راهنما", callback_data="help")],
         [InlineKeyboardButton("➕ افزودن ربات به گروه", callback_data="add_group")],
     ])
+
 
 
 def home_text(user):
