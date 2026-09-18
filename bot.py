@@ -5,6 +5,11 @@ import random
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, ContextTypes, filters
 
+# Telegram inline-button styles: primary=blue, success=green, danger=red.
+def B(text, callback_data, style="primary"):
+    return InlineKeyboardButton(text=text, callback_data=callback_data, style=style)
+
+
 TOKEN = os.getenv("BOT_TOKEN")
 DB_FILE = "oceangame.db"
 
@@ -236,46 +241,43 @@ INVENTORY_EXTRA = [
 
 def main_menu():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("👤 پروفایل / موجودی", callback_data="profile")],
+        [B("👤 پروفایل / موجودی", "profile", "primary")],
         [
-            InlineKeyboardButton("🏦 بانک", callback_data="bank"),
-            InlineKeyboardButton("🏠 کسب درآمد", callback_data="income"),
+            B("🏦 بانک", "bank", "primary"),
+            B("🏠 کسب درآمد", "income", "primary"),
         ],
         [
-            InlineKeyboardButton("📈 ترید", callback_data="trade"),
-            InlineKeyboardButton("🏁 مسابقه / ماشین‌ها", callback_data="cars"),
+            B("📈 ترید", "trade", "primary"),
+            B("🏁 مسابقه / ماشین‌ها", "cars", "primary"),
         ],
         [
-            InlineKeyboardButton("💱 صرافی رمزارز", callback_data="crypto"),
-            InlineKeyboardButton("📦 انبار و فروش", callback_data="inventory"),
+            B("💱 صرافی رمزارز", "crypto", "primary"),
+            B("📦 انبار و فروش", "inventory", "primary"),
         ],
         [
-            InlineKeyboardButton("🛒 فروشگاه", callback_data="shop"),
-            InlineKeyboardButton("🐾 پت و لوازم", callback_data="pets"),
+            B("🛒 فروشگاه", "shop", "primary"),
+            B("🐾 پت و لوازم", "pets", "primary"),
         ],
         [
-            InlineKeyboardButton("🏴 بازار سیاه", callback_data="black_market"),
-            InlineKeyboardButton("🕸️ دارک وب", callback_data="dark_web"),
+            B("🏴 بازار سیاه", "black_market", "primary"),
+            B("🕸️ دارک وب", "dark_web", "primary"),
         ],
-        [InlineKeyboardButton("🏳️ کلن", callback_data="clan")],
-        [InlineKeyboardButton("❓ راهنما", callback_data="help")],
-        [InlineKeyboardButton("➕ افزودن ربات به گروه", callback_data="add_group")],
+        [B("🏳️ کلن", "clan", "primary")],
+        [B("❓ راهنما", "help", "primary")],
+        [B("➕ افزودن ربات به گروه", "add_group", "success")],
     ])
-
-
 def home_text(user):
     p = get_player(user)
     return (
         f"👋 سلام {p['name']}\n\n"
         f"💲 موجودی: $ {p['coins']:,}\n"
         f"🏦 بانک: $ {p['bank']:,}\n"
-        f"🏷️ سطح: نوب (لول {p['level']})"
+        f"🏷️ سطح: نوب\n\n"
+        "از منوی زیر استفاده کن:"
     )
-
-
 def back_menu():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("منو اصلی", callback_data="home")]
+        [B("منو اصلی", callback_data="home")]
     ])
 
 
@@ -295,14 +297,12 @@ def bank_text(user_id):
 
 def bank_keyboard():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("💰 سپرده 5,000", callback_data="bank_deposit:5000")],
-        [InlineKeyboardButton("💰 سپرده 50,000", callback_data="bank_deposit:50000")],
-        [InlineKeyboardButton("💰 سپرده 200,000", callback_data="bank_deposit:200000")],
-        [InlineKeyboardButton("💳 برداشت کامل", callback_data="bank_withdraw")],
-        [InlineKeyboardButton("🔙 برگشت", callback_data="home")],
+        [B("💰 سپرده 5,000", "bank_deposit:5000", "danger")],
+        [B("💰 سپرده 50,000", "bank_deposit:50000", "danger")],
+        [B("💰 سپرده 200,000", "bank_deposit:200000", "danger")],
+        [B("💳 برداشت کامل", "bank_withdraw", "danger")],
+        [B("🔙 برگشت", "home", "primary")],
     ])
-
-
 def deposit_amount(user_id, amount):
     conn = db()
     row = conn.execute(
@@ -372,14 +372,14 @@ def income_keyboard():
     rows = []
     for key, title, amount in INCOME_ITEMS:
         rows.append([
-            InlineKeyboardButton(
+            B(
                 f"{title} — +{amount:,}/۵س",
                 callback_data=key
             )
         ])
     rows += [
-        [InlineKeyboardButton("💰 برداشت درآمد (0)", callback_data="income_collect")],
-        [InlineKeyboardButton("🔙 برگشت", callback_data="home")],
+        [B("💰 برداشت درآمد (0)", callback_data="income_collect")],
+        [B("🔙 برگشت", callback_data="home")],
     ]
     return InlineKeyboardMarkup(rows)
 
@@ -388,14 +388,12 @@ def income_keyboard():
 
 def trade_keyboard():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📈 ترید با 1,000", callback_data="trade:1000")],
-        [InlineKeyboardButton("📈 ترید با 10,000", callback_data="trade:10000")],
-        [InlineKeyboardButton("📈 ترید با 50,000", callback_data="trade:50000")],
-        [InlineKeyboardButton("📈 ترید با 100,000", callback_data="trade:100000")],
-        [InlineKeyboardButton("برگشت 🔙", callback_data="home")],
+        [B("📈 ترید با 1,000", "trade:1000", "primary")],
+        [B("📈 ترید با 10,000", "trade:10000", "primary")],
+        [B("📈 ترید با 50,000", "trade:50000", "primary")],
+        [B("📈 ترید با 100,000", "trade:100000", "primary")],
+        [B("برگشت 🔙", "home", "primary")],
     ])
-
-
 def run_trade(user_id, amount):
     conn = db()
     row = conn.execute(
@@ -443,15 +441,10 @@ def cars_keyboard():
     rows = []
     for car_id, name, price in CARS:
         rows.append([
-            InlineKeyboardButton(
-                f"🚗 خرید {name} — {price:,}",
-                callback_data=f"car:{car_id}"
-            )
+            B(f"🚗 خرید {name} — {price:,}", f"car:{car_id}", "success")
         ])
-    rows.append([InlineKeyboardButton("منو 🔙", callback_data="home")])
+    rows.append([B("منو 🔙", "home", "primary")])
     return InlineKeyboardMarkup(rows)
-
-
 def buy_car(user_id, car_id):
     selected = next((c for c in CARS if c[0] == car_id), None)
     if not selected:
@@ -519,13 +512,11 @@ def crypto_keyboard():
     rows = []
     for symbol in CRYPTO:
         rows.append([
-            InlineKeyboardButton(f"💵 خرید {symbol}", callback_data=f"crypto_buy:{symbol}"),
-            InlineKeyboardButton(f"💷 فروش {symbol}", callback_data=f"crypto_sell:{symbol}"),
+            B(f"💲 خرید {symbol}", f"crypto_buy:{symbol}", "success"),
+            B(f"💷 فروش {symbol}", f"crypto_sell:{symbol}", "primary"),
         ])
-    rows.append([InlineKeyboardButton("برگشت 🔙", callback_data="home")])
+    rows.append([B("برگشت 🔙", "home", "primary")])
     return InlineKeyboardMarkup(rows)
-
-
 def crypto_trade(user_id, symbol, quantity, side):
     symbol = symbol.upper()
     if symbol not in CRYPTO:
@@ -630,8 +621,8 @@ def inventory_text(user_id):
 
 def inventory_keyboard():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("💵 فروش آیتم", callback_data="inventory_sell_help")],
-        [InlineKeyboardButton("🔙 برگشت", callback_data="home")],
+        [B("💵 فروش آیتم", callback_data="inventory_sell_help")],
+        [B("🔙 برگشت", callback_data="home")],
     ])
 
 
@@ -685,17 +676,12 @@ def black_market_text():
 def black_market_keyboard():
     rows = []
     for item_id, name, price, emoji in BLACK_MARKET:
-        style = "🟢" if item_id != "MUG01" else "🔴"
+        style = "danger" if item_id == "MUG01" else "primary"
         rows.append([
-            InlineKeyboardButton(
-                f"{style} {emoji} {name} — 💵 {price:,}",
-                callback_data=f"blackbuy:{item_id}"
-            )
+            B(f"{emoji} 💵 {price:,} — {name}", f"blackbuy:{item_id}", style)
         ])
-    rows.append([InlineKeyboardButton("منو 🔙", callback_data="home")])
+    rows.append([B("منو 🔙", "home", "primary")])
     return InlineKeyboardMarkup(rows)
-
-
 def buy_black_market(user_id, item_id):
     selected = next((x for x in BLACK_MARKET if x[0] == item_id), None)
     if not selected:
@@ -746,12 +732,8 @@ def dark_web_text():
 
 def dark_web_keyboard():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔪 اجیر قاتل — $10,000", callback_data="dark_assassin")],
-        [InlineKeyboardButton("💻 اجیر هکر — $20,000", callback_data="dark_hacker")],
-        [InlineKeyboardButton("منو 🔙", callback_data="home")],
+        [B("منو 🔙", "home", "primary")],
     ])
-
-
 # -------------------- Clan --------------------
 
 def clan_text():
@@ -771,18 +753,8 @@ def clan_text():
 
 def clan_keyboard():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🏳️ ساخت کلن", callback_data="clan_create_help")],
-        [InlineKeyboardButton("🏳️ جوین کلن", callback_data="clan_join_help")],
-        [InlineKeyboardButton("📋 کارت کلن", callback_data="clan_card_help")],
-        [InlineKeyboardButton("💰 خزانه کلن", callback_data="clan_treasury_help")],
-        [InlineKeyboardButton("🏆 چالش کلن", callback_data="clan_challenge_help")],
-        [InlineKeyboardButton("⚔️ جنگ کلن", callback_data="clan_war_help")],
-        [InlineKeyboardButton("🌍 رتبه کلن‌ها", callback_data="clan_rank_help")],
-        [InlineKeyboardButton("🚪 خروج / انحلال", callback_data="clan_leave_help")],
-        [InlineKeyboardButton("منو 🔙", callback_data="home")],
+        [B("منو 🔙", "home", "primary")],
     ])
-
-
 # -------------------- Help --------------------
 
 def help_text():
@@ -795,29 +767,27 @@ def help_text():
 def help_keyboard():
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("🏳️ کلن", callback_data="help_clan"),
-            InlineKeyboardButton("💲 درآمد رایگان", callback_data="help_income"),
+            B("🏳️ کلن", "help_clan", "primary"),
+            B("💲 درآمد رایگان", "help_income", "primary"),
         ],
         [
-            InlineKeyboardButton("🎮 بازی‌ها", callback_data="help_games"),
-            InlineKeyboardButton("💰 پول و بانک", callback_data="help_money"),
+            B("🎮 بازی‌ها", "help_games", "primary"),
+            B("💰 پول و بانک", "help_money", "primary"),
         ],
         [
-            InlineKeyboardButton("🏠 سرمایه‌گذاری", callback_data="help_invest"),
-            InlineKeyboardButton("🛒 فروشگاه و بازار", callback_data="help_store"),
+            B("🏠 سرمایه‌گذاری", "help_invest", "primary"),
+            B("🛒 فروشگاه و بازار", "help_store", "primary"),
         ],
         [
-            InlineKeyboardButton("💜 اجتماعی و خانواده", callback_data="help_social"),
-            InlineKeyboardButton("🥷 دزدی و دارک وب", callback_data="help_crime"),
+            B("💜 اجتماعی و خانواده", "help_social", "primary"),
+            B("🥷 دزدی و دارک وب", "help_crime", "primary"),
         ],
         [
-            InlineKeyboardButton("🚀 موشک", callback_data="help_rocket"),
-            InlineKeyboardButton("🏆 سایر", callback_data="help_other"),
+            B("🚀 موشک", "help_rocket", "primary"),
+            B("🏆 سایر", "help_other", "primary"),
         ],
-        [InlineKeyboardButton("منو اصلی 🔙", callback_data="home")],
+        [B("منو اصلی 🔙", "home", "primary")],
     ])
-
-
 HELP_DETAILS = {
     "help_clan": "🏳️ کلن\nساخت کلن، جوین، کارت کلن، خزانه، چالش، جنگ، رتبه و خروج.",
     "help_income": "💲 درآمد رایگان\nبخش کسب درآمد و جمع‌آوری درآمد.",
@@ -900,7 +870,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text(
             text,
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔙 برگشت به کسب درآمد", callback_data="income")]
+                [B("🔙 برگشت به کسب درآمد", callback_data="income")]
             ])
         )
         return
@@ -959,7 +929,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text(
             message,
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔙 برگشت به صرافی", callback_data="crypto")]
+                [B("🔙 برگشت به صرافی", callback_data="crypto")]
             ])
         )
         return
@@ -977,7 +947,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "فرمت: فروش <id>\n"
             "مثال: فروش SW001",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔙 برگشت به انبار", callback_data="inventory")]
+                [B("🔙 برگشت به انبار", callback_data="inventory")]
             ])
         )
         return
@@ -986,10 +956,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text(
             "🛒 فروشگاه\n\nچی میخوای بخری؟",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🐾 پت", callback_data="shop_pet")],
-                [InlineKeyboardButton("🚘 وسیله نقلیه", callback_data="shop_vehicle")],
-                [InlineKeyboardButton("🍼 لوازم بچه", callback_data="shop_baby")],
-                [InlineKeyboardButton("🔙 برگشت", callback_data="home")],
+                [B("🐾 پت", callback_data="shop_pet")],
+                [B("🚘 وسیله نقلیه", callback_data="shop_vehicle")],
+                [B("🍼 لوازم بچه", callback_data="shop_baby")],
+                [B("🔙 برگشت", callback_data="home")],
             ])
         )
         return
@@ -1004,7 +974,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"{titles[data]}\n\n"
             "جزئیات این دسته در داده‌های فعلی عکس‌ها مشخص نشده است.",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔙 برگشت به فروشگاه", callback_data="shop")]
+                [B("🔙 برگشت به فروشگاه", callback_data="shop")]
             ])
         )
         return
@@ -1047,7 +1017,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text(
             text,
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔙 برگشت به دارک وب", callback_data="dark_web")]
+                [B("🔙 برگشت به دارک وب", callback_data="dark_web")]
             ])
         )
         return
@@ -1069,7 +1039,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text(
             HELP_DETAILS[data],
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔙 برگشت به راهنما", callback_data="help")]
+                [B("🔙 برگشت به راهنما", callback_data="help")]
             ])
         )
         return
