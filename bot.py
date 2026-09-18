@@ -249,6 +249,29 @@ INVENTORY_EXTRA = [
     ("MONEY_CARD", "جعل کننده کارت", "💳"),
 ]
 
+# -------------------- Store items --------------------
+
+SHOP_ITEMS = {
+    "shop_baby": [
+        ("baby_milk", "شیر بچه", 300, "🍼"),
+        ("baby_diaper", "پوشک بچه", 500, "🖇️"),
+        ("baby_food", "غذای کمکی", 700, "🥣"),
+        ("baby_toy", "اسباب‌بازی", 1500, "🧸"),
+    ],
+    "shop_pet": [
+        ("pet_cat", "گربه", 5000, "🐱"),
+        ("pet_dog", "سگ", 8000, "🐶"),
+        ("pet_rabbit", "خرگوش", 3000, "🐰"),
+        ("pet_parrot", "طوطی", 10000, "🦜"),
+    ],
+    "shop_vehicle": [
+        ("vehicle_bicycle", "دوچرخه", 10000, "🚲"),
+        ("vehicle_motorcycle", "موتور", 50000, "🏍️"),
+        ("vehicle_car", "ماشین", 200000, "🚗"),
+        ("vehicle_airplane", "هواپیما", 1000000, "✈️"),
+    ],
+}
+
 
 # -------------------- Main menu --------------------
 
@@ -814,6 +837,56 @@ def sell_inventory_item(user_id, item_id):
     return f"✅ {row['item_name']} فروخته شد.\n💵 دریافتی: {price:,} $"
 
 
+# -------------------- Store purchases --------------------
+
+def buy_shop_item(user_id, category, item_id):
+    selected = next(
+        (item for item in SHOP_ITEMS.get(category, []) if item[0] == item_id),
+        None,
+    )
+    if not selected:
+        return "❌ این کالا پیدا نشد."
+
+    _, name, price, emoji = selected
+    conn = db()
+    row = conn.execute(
+        "SELECT coins FROM players WHERE user_id=?",
+        (user_id,),
+    ).fetchone()
+
+    if not row or row["coins"] < price:
+        conn.close()
+        return f"❌ موجودی کافی نیست.\n💵 قیمت: {price:,} $"
+
+    conn.execute(
+        "UPDATE players SET coins=coins-? WHERE user_id=?",
+        (price, user_id),
+    )
+    conn.execute(
+        """
+        INSERT INTO inventory(user_id,item_id,item_name,quantity)
+        VALUES(?,?,?,1)
+        ON CONFLICT(user_id,item_id)
+        DO UPDATE SET quantity=quantity+1
+        """,
+        (user_id, item_id.upper(), f"{emoji} {name}"),
+    )
+    conn.commit()
+    conn.close()
+
+    return f"✅ {name} خریداری شد.\n💸 قیمت: {price:,} $"
+
+
+def shop_category_keyboard(category):
+    rows = []
+    for item_id, name, price, emoji in SHOP_ITEMS[category]:
+        rows.append([
+            B(f"{emoji} 💵 {price:,} — {name}", f"shopbuy:{category}:{item_id}", "primary")
+        ])
+    rows.append([B("برگشت 🔙", "shop", "primary")])
+    return InlineKeyboardMarkup(rows)
+
+
 # -------------------- Black market --------------------
 
 def black_market_text():
@@ -1139,12 +1212,28 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         }
         await q.edit_message_text(
             f"{titles[data]}\n\n"
-            "جزئیات این دسته در داده‌های فعلی عکس‌ها مشخص نشده است.",
-            reply_markup=InlineKeyboardMarkup([
-                [B("🔙 برگشت به فروشگاه", callback_data="shop")]
-            ])
+            "برای خرید روی گزینه موردنظر بزن:",
+            reply_markup=shop_category_keyboard(data)
         )
         return
+
+    if data.startswith("shopbuy:"):
+        parts = data.split(":", 2)
+        if len(parts) == 3:
+            category, item_id = parts[1], parts[2]
+            message = buy_shop_item(user.id, category, item_id)
+            await q.answer(message, show_alert=True)
+            titles = {
+                "shop_pet": "🐾 پت",
+                "shop_vehicle": "🚘 وسیله نقلیه",
+                "shop_baby": "🍼 لوازم بچه",
+            }
+            await q.edit_message_text(
+                f"{titles.get(category, '🛒 فروشگاه')}\n\n"
+                "برای خرید روی گزینه موردنظر بزن:",
+                reply_markup=shop_category_keyboard(category)
+            )
+            return
 
     if data == "pets":
         await q.edit_message_text(
