@@ -1043,7 +1043,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "profile":
         text = (
             f"👤 {p['name']}\n"
-            f"💲 موجودی: $ {p['coins']:,}\n"
+            f"💵 موجودی: $ {p['coins']:,}\n"
             f"🏦 بانک: $ {p['bank']:,}\n"
             f"💰 مجموع: $ {p['coins'] + p['bank']:,}\n"
             f"🏷️ سطح: نوب (لول {p['level']})"
@@ -1340,10 +1340,8 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
 
     if text in {"منو", "مانی", "/menu"}:
-        await update.message.reply_text(
-            home_text(user),
-            reply_markup=main_menu()
-        )
+        # متن «منو» دقیقاً همان عملکرد /start را اجرا می‌کند.
+        await start(update, context)
         return
 
     if text in {"کسب درآمد", "کسب درآمدها"}:
