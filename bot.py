@@ -8,6 +8,7 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Mess
 TOKEN = os.getenv("BOT_TOKEN")
 DB_FILE = "oceangame.db"
 
+# -------------------- Database --------------------
 
 def db():
     conn = sqlite3.connect(DB_FILE)
@@ -17,6 +18,7 @@ def db():
 
 def init_db():
     conn = db()
+
     conn.execute("""
         CREATE TABLE IF NOT EXISTS players (
             user_id INTEGER PRIMARY KEY,
@@ -24,56 +26,241 @@ def init_db():
             coins INTEGER NOT NULL DEFAULT 0,
             bank INTEGER NOT NULL DEFAULT 0,
             level INTEGER NOT NULL DEFAULT 1,
+            bank_profit INTEGER NOT NULL DEFAULT 0,
+            bank_last_day INTEGER NOT NULL DEFAULT 0,
             created_at INTEGER NOT NULL
         )
     """)
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS inventory (
+            user_id INTEGER NOT NULL,
+            item_id TEXT NOT NULL,
+            item_name TEXT NOT NULL,
+            quantity INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (user_id, item_id)
+        )
+    """)
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS crypto (
+            user_id INTEGER NOT NULL,
+            symbol TEXT NOT NULL,
+            quantity REAL NOT NULL DEFAULT 0,
+            PRIMARY KEY (user_id, symbol)
+        )
+    """)
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS cars (
+            user_id INTEGER NOT NULL,
+            car_id TEXT NOT NULL,
+            car_name TEXT NOT NULL,
+            price INTEGER NOT NULL,
+            PRIMARY KEY (user_id, car_id)
+        )
+    """)
+
+    # Upgrade older OceanGame databases without deleting player data.
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(players)").fetchall()}
+    if "bank_profit" not in columns:
+        conn.execute("ALTER TABLE players ADD COLUMN bank_profit INTEGER NOT NULL DEFAULT 0")
+    if "bank_last_day" not in columns:
+        conn.execute("ALTER TABLE players ADD COLUMN bank_last_day INTEGER NOT NULL DEFAULT 0")
+
     conn.commit()
     conn.close()
 
 
 def get_player(user):
     conn = db()
-    row = conn.execute("SELECT * FROM players WHERE user_id=?", (user.id,)).fetchone()
+    row = conn.execute(
+        "SELECT * FROM players WHERE user_id=?",
+        (user.id,)
+    ).fetchone()
+
     if row is None:
         conn.execute(
-            "INSERT INTO players(user_id,name,coins,bank,level,created_at) VALUES(?,?,?,?,?,?)",
-            (user.id, user.first_name or "بازیکن", 0, 0, 1, int(time.time())),
+            """
+            INSERT INTO players(
+                user_id, name, coins, bank, level,
+                bank_profit, bank_last_day, created_at
+            )
+            VALUES(?,?,?,?,?,?,?,?)
+            """,
+            (
+                user.id,
+                user.first_name or "بازیکن",
+                0,
+                0,
+                1,
+                0,
+                int(time.time() // 86400),
+                int(time.time()),
+            ),
         )
         conn.commit()
-        row = conn.execute("SELECT * FROM players WHERE user_id=?", (user.id,)).fetchone()
     else:
-        conn.execute("UPDATE players SET name=? WHERE user_id=?", (user.first_name or row["name"], user.id))
+        conn.execute(
+            "UPDATE players SET name=? WHERE user_id=?",
+            (user.first_name or row["name"], user.id)
+        )
         conn.commit()
-        row = conn.execute("SELECT * FROM players WHERE user_id=?", (user.id,)).fetchone()
+
+    row = conn.execute(
+        "SELECT * FROM players WHERE user_id=?",
+        (user.id,)
+    ).fetchone()
+    conn.close()
+
+    apply_bank_interest(user.id)
+    return get_player_raw(user.id)
+
+
+def get_player_raw(user_id):
+    conn = db()
+    row = conn.execute(
+        "SELECT * FROM players WHERE user_id=?",
+        (user_id,)
+    ).fetchone()
     conn.close()
     return row
 
+
+def apply_bank_interest(user_id):
+    """
+    Bank UI shows 1% daily profit.
+    Interest is accumulated once per day and is not mixed into bank principal.
+    """
+    conn = db()
+    row = conn.execute(
+        "SELECT bank, bank_profit, bank_last_day FROM players WHERE user_id=?",
+        (user_id,)
+    ).fetchone()
+
+    if row is None:
+        conn.close()
+        return
+
+    today = int(time.time() // 86400)
+    last_day = int(row["bank_last_day"] or today)
+
+    if today > last_day and row["bank"] > 0:
+        days = min(today - last_day, 30)
+        profit = int(row["bank"] * 0.01 * days)
+        conn.execute(
+            """
+            UPDATE players
+            SET bank_profit=bank_profit+?, bank_last_day=?
+            WHERE user_id=?
+            """,
+            (profit, today, user_id),
+        )
+    elif today > last_day:
+        conn.execute(
+            "UPDATE players SET bank_last_day=? WHERE user_id=?",
+            (today, user_id),
+        )
+
+    conn.commit()
+    conn.close()
+
+
+# -------------------- Game data --------------------
+
+CARS = [
+    ("pride", "پراید", 80000),
+    ("peugeot206", "پژو ۲۰۶", 250000),
+    ("samand", "سمند", 400000),
+    ("shahin", "شاهین", 800000),
+    ("bmw", "BMW", 2500000),
+    ("mercedes_benz", "مرسدس بنز", 4000000),
+    ("ferrari", "فراری", 10000000),
+    ("bugatti", "بوگاتی", 30000000),
+]
+
+CRYPTO = {
+    "ADA": 1.003,
+    "BTC": 10410.243,
+    "DOGE": 0.244,
+    "ETH": 1296.764,
+    "GOLD": 2038.289,
+    "OCEAN": 22.835,
+    "OIL": 65.093,
+    "PEPE": 0.019,
+    "SHIB": 0.004,
+    "SILVER": 25.014,
+    "SOL": 121.334,
+    "TON": 4.477,
+    "USDT": 0.852,
+    "XRP": 2.878,
+}
+
+CRYPTO_NAMES = {
+    "ADA": "کاردانو",
+    "BTC": "بیتکوین",
+    "DOGE": "دوج کوین",
+    "ETH": "اتریوم",
+    "GOLD": "طلا",
+    "OCEAN": "اوشن",
+    "OIL": "نفت",
+    "PEPE": "پپه",
+    "SHIB": "شیبا",
+    "SILVER": "نقره",
+    "SOL": "سولانا",
+    "TON": "تون کوین",
+    "USDT": "تتر",
+    "XRP": "ریپل",
+}
+
+BLACK_MARKET = [
+    ("SW001", "چاقو", 2000, "🔪"),
+    ("HT01", "نقاب خیابانی", 2000, "🎭"),
+    ("HT02", "موتور فرار", 2000, "🏍️"),
+    ("SW002", "شمشیر چوبی", 2000, "🗡️"),
+    ("MUG01", "دستکش بی‌ردپا", 2000, "🧤"),
+    ("HT01B", "ماسک سرقت", 3000, "🎭"),
+    ("POTION", "معجون سلامتی", 3200, "🧪"),
+    ("AR001", "زره چرمی", 3200, "🛡️"),
+]
+
+# Items visible in the inventory screenshot. These can be expanded by the store later.
+INVENTORY_EXTRA = [
+    ("DOG", "سگ", "🐶"),
+    ("CAMERA", "مسدودکننده دوربین", "📷"),
+    ("MONEY_CARD", "جعل کننده کارت", "💳"),
+]
+
+
+# -------------------- Main menu --------------------
 
 def main_menu():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("👤 پروفایل / موجودی", callback_data="profile")],
         [
-            InlineKeyboardButton("🏠 کسب درآمد", callback_data="income"),
-            InlineKeyboardButton("🛒 فروشگاه", callback_data="shop"),
-        ],
-        [
             InlineKeyboardButton("🏦 بانک", callback_data="bank"),
-            InlineKeyboardButton("📈 ترید", callback_data="trade"),
+            InlineKeyboardButton("🏠 کسب درآمد", callback_data="income"),
         ],
         [
-            InlineKeyboardButton("💱 صرافی رمز ارز", callback_data="crypto"),
+            InlineKeyboardButton("📈 ترید", callback_data="trade"),
             InlineKeyboardButton("🏁 مسابقه / ماشین‌ها", callback_data="cars"),
         ],
         [
+            InlineKeyboardButton("💱 صرافی رمزارز", callback_data="crypto"),
             InlineKeyboardButton("📦 انبار و فروش", callback_data="inventory"),
-            InlineKeyboardButton("🏴 بازار سیاه", callback_data="black_market"),
         ],
-        [InlineKeyboardButton("🕸 دارک وب", callback_data="dark_web")],
+        [
+            InlineKeyboardButton("🛒 فروشگاه", callback_data="shop"),
+            InlineKeyboardButton("🐾 پت و لوازم", callback_data="pets"),
+        ],
+        [
+            InlineKeyboardButton("🏴 بازار سیاه", callback_data="black_market"),
+            InlineKeyboardButton("🕸️ دارک وب", callback_data="dark_web"),
+        ],
         [InlineKeyboardButton("🏳️ کلن", callback_data="clan")],
         [InlineKeyboardButton("❓ راهنما", callback_data="help")],
         [InlineKeyboardButton("➕ افزودن ربات به گروه", callback_data="add_group")],
     ])
-
 
 
 def home_text(user):
@@ -82,20 +269,570 @@ def home_text(user):
         f"👋 سلام {p['name']}\n\n"
         f"💲 موجودی: $ {p['coins']:,}\n"
         f"🏦 بانک: $ {p['bank']:,}\n"
-        f"🏷️ سطح: نوب (لول {p['level']})\n\n"
-        "🌊 به OceanGame خوش آمدی!"
+        f"🏷️ سطح: نوب (لول {p['level']})"
     )
 
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(home_text(update.effective_user), reply_markup=main_menu())
-
-
-def page_keyboard():
+def back_menu():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔙 برگشت به منو", callback_data="home")]
+        [InlineKeyboardButton("منو اصلی", callback_data="home")]
     ])
 
+
+# -------------------- Bank --------------------
+
+def bank_text(user_id):
+    p = get_player_raw(user_id)
+    return (
+        "🏦 بانک\n"
+        "سود روزانه: 1%\n\n"
+        f"💵 موجودی نقدی: $ {p['coins']:,}\n"
+        f"🏦 موجودی بانک: $ {p['bank']:,}\n"
+        f"📈 سود انباشته: $ {p['bank_profit']:,}\n"
+        "💸 آماده برداشت"
+    )
+
+
+def bank_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("💰 سپرده 5,000", callback_data="bank_deposit:5000")],
+        [InlineKeyboardButton("💰 سپرده 50,000", callback_data="bank_deposit:50000")],
+        [InlineKeyboardButton("💰 سپرده 200,000", callback_data="bank_deposit:200000")],
+        [InlineKeyboardButton("💳 برداشت کامل", callback_data="bank_withdraw")],
+        [InlineKeyboardButton("🔙 برگشت", callback_data="home")],
+    ])
+
+
+def deposit_amount(user_id, amount):
+    conn = db()
+    row = conn.execute(
+        "SELECT coins FROM players WHERE user_id=?",
+        (user_id,)
+    ).fetchone()
+
+    if not row or row["coins"] < amount:
+        conn.close()
+        return False, "❌ موجودی نقدی کافی نیست."
+
+    conn.execute(
+        "UPDATE players SET coins=coins-?, bank=bank+? WHERE user_id=?",
+        (amount, amount, user_id)
+    )
+    conn.commit()
+    conn.close()
+    return True, f"✅ {amount:,} $ به بانک سپرده شد."
+
+
+def withdraw_bank(user_id):
+    conn = db()
+    row = conn.execute(
+        "SELECT bank, bank_profit FROM players WHERE user_id=?",
+        (user_id,)
+    ).fetchone()
+
+    if not row:
+        conn.close()
+        return "❌ بازیکن پیدا نشد."
+
+    total = int(row["bank"]) + int(row["bank_profit"])
+    if total <= 0:
+        conn.close()
+        return "❌ مبلغی برای برداشت وجود ندارد."
+
+    conn.execute(
+        """
+        UPDATE players
+        SET coins=coins+?, bank=0, bank_profit=0
+        WHERE user_id=?
+        """,
+        (total, user_id)
+    )
+    conn.commit()
+    conn.close()
+    return f"✅ برداشت کامل انجام شد.\n💵 مبلغ دریافتی: $ {total:,}"
+
+
+# -------------------- Income --------------------
+
+INCOME_ITEMS = [
+    ("income_supermarket", "🏪 سوپرمارکت", 8000),
+    ("income_restaurant", "🍽️ رستوران", 16000),
+    ("income_bakery", "🥖 نانوایی", 28000),
+    ("income_flour_farm", "🌾 مزرعه آرد", 48000),
+    ("income_factory", "🏭 کارخانه", 74000),
+    ("income_brothel", "🚫 جنده‌خونه", 105000),
+    ("income_iron_mine", "⛏️ معدن آهن", 150000),
+    ("income_opium_farm", "⭐ مزرعه تریاک", 220000),
+    ("income_falafel", "🥙 فلافلی", 300000),
+    ("income_akbar_jojeh", "🍗 اکبر جوجه", 420000),
+]
+
+
+def income_keyboard():
+    rows = []
+    for key, title, amount in INCOME_ITEMS:
+        rows.append([
+            InlineKeyboardButton(
+                f"{title} — +{amount:,}/۵س",
+                callback_data=key
+            )
+        ])
+    rows += [
+        [InlineKeyboardButton("💰 برداشت درآمد (0)", callback_data="income_collect")],
+        [InlineKeyboardButton("🔙 برگشت", callback_data="home")],
+    ]
+    return InlineKeyboardMarkup(rows)
+
+
+# -------------------- Trade --------------------
+
+def trade_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📈 ترید با 1,000", callback_data="trade:1000")],
+        [InlineKeyboardButton("📈 ترید با 10,000", callback_data="trade:10000")],
+        [InlineKeyboardButton("📈 ترید با 50,000", callback_data="trade:50000")],
+        [InlineKeyboardButton("📈 ترید با 100,000", callback_data="trade:100000")],
+        [InlineKeyboardButton("برگشت 🔙", callback_data="home")],
+    ])
+
+
+def run_trade(user_id, amount):
+    conn = db()
+    row = conn.execute(
+        "SELECT coins FROM players WHERE user_id=?",
+        (user_id,)
+    ).fetchone()
+
+    if not row or row["coins"] < amount:
+        conn.close()
+        return "❌ موجودی کافی نیست."
+
+    # Simple 50/50 game mechanic; the screenshot only specifies the selectable stakes.
+    if random.choice([True, False]):
+        result = amount
+        conn.execute(
+            "UPDATE players SET coins=coins+? WHERE user_id=?",
+            (result, user_id)
+        )
+        message = f"📈 برنده شدی!\n💵 سود: +{result:,} $"
+    else:
+        conn.execute(
+            "UPDATE players SET coins=coins-? WHERE user_id=?",
+            (amount, user_id)
+        )
+        message = f"📉 باختی.\n💸 ضرر: -{amount:,} $"
+
+    conn.commit()
+    conn.close()
+    return message
+
+
+# -------------------- Cars --------------------
+
+def cars_text():
+    lines = [
+        "🏁 ماشین‌ها و مسابقه\n\n",
+        "ماشین‌های تو:\n",
+        "—\n\n",
+        "برای شروع مسابقه توی گروه بنویس: مسابقه 5000"
+    ]
+    return "\n".join(lines)
+
+
+def cars_keyboard():
+    rows = []
+    for car_id, name, price in CARS:
+        rows.append([
+            InlineKeyboardButton(
+                f"🚗 خرید {name} — {price:,}",
+                callback_data=f"car:{car_id}"
+            )
+        ])
+    rows.append([InlineKeyboardButton("منو 🔙", callback_data="home")])
+    return InlineKeyboardMarkup(rows)
+
+
+def buy_car(user_id, car_id):
+    selected = next((c for c in CARS if c[0] == car_id), None)
+    if not selected:
+        return "❌ ماشین پیدا نشد."
+
+    _, name, price = selected
+    conn = db()
+    row = conn.execute(
+        "SELECT coins FROM players WHERE user_id=?",
+        (user_id,)
+    ).fetchone()
+
+    if not row or row["coins"] < price:
+        conn.close()
+        return "❌ موجودی کافی نیست."
+
+    owned = conn.execute(
+        "SELECT 1 FROM cars WHERE user_id=? AND car_id=?",
+        (user_id, car_id)
+    ).fetchone()
+
+    if owned:
+        conn.close()
+        return "ℹ️ این ماشین را قبلاً خریدی."
+
+    conn.execute(
+        "UPDATE players SET coins=coins-? WHERE user_id=?",
+        (price, user_id)
+    )
+    conn.execute(
+        "INSERT INTO cars(user_id,car_id,car_name,price) VALUES(?,?,?,?)",
+        (user_id, car_id, name, price)
+    )
+    conn.execute(
+        """
+        INSERT INTO inventory(user_id,item_id,item_name,quantity)
+        VALUES(?,?,?,1)
+        ON CONFLICT(user_id,item_id)
+        DO UPDATE SET quantity=quantity+1
+        """,
+        (user_id, f"CAR_{car_id}", f"🚗 {name}")
+    )
+    conn.commit()
+    conn.close()
+
+    return f"✅ {name} خریداری شد و به انبار اضافه شد.\n💸 قیمت: {price:,} $"
+
+
+# -------------------- Crypto exchange --------------------
+
+def crypto_text(user_id):
+    lines = [
+        "💱 صرافی رمزارز",
+        "برای مقدار دلخواه بنویس: خرید 0.5 بیتکوین یا فروش OCEAN 12",
+        "",
+    ]
+    for symbol, price in CRYPTO.items():
+        lines.append(
+            f"• {symbol} ({CRYPTO_NAMES[symbol]}) — {price:g} 💲"
+        )
+    return "\n".join(lines)
+
+
+def crypto_keyboard():
+    rows = []
+    for symbol in CRYPTO:
+        rows.append([
+            InlineKeyboardButton(f"💵 خرید {symbol}", callback_data=f"crypto_buy:{symbol}"),
+            InlineKeyboardButton(f"💷 فروش {symbol}", callback_data=f"crypto_sell:{symbol}"),
+        ])
+    rows.append([InlineKeyboardButton("برگشت 🔙", callback_data="home")])
+    return InlineKeyboardMarkup(rows)
+
+
+def crypto_trade(user_id, symbol, quantity, side):
+    symbol = symbol.upper()
+    if symbol not in CRYPTO:
+        return "❌ رمزارز پیدا نشد."
+
+    try:
+        quantity = float(quantity)
+    except ValueError:
+        return "❌ مقدار نامعتبر است."
+
+    if quantity <= 0:
+        return "❌ مقدار باید بیشتر از صفر باشد."
+
+    price = CRYPTO[symbol]
+    total = quantity * price
+
+    conn = db()
+    player = conn.execute(
+        "SELECT coins FROM players WHERE user_id=?",
+        (user_id,)
+    ).fetchone()
+
+    if side == "buy":
+        if not player or player["coins"] < total:
+            conn.close()
+            return "❌ موجودی کافی نیست."
+
+        conn.execute(
+            "UPDATE players SET coins=coins-? WHERE user_id=?",
+            (int(total), user_id)
+        )
+        conn.execute(
+            """
+            INSERT INTO crypto(user_id,symbol,quantity)
+            VALUES(?,?,?)
+            ON CONFLICT(user_id,symbol)
+            DO UPDATE SET quantity=quantity+excluded.quantity
+            """,
+            (user_id, symbol, quantity)
+        )
+        conn.commit()
+        conn.close()
+        return f"✅ خرید انجام شد.\n{quantity:g} {symbol}\n💸 هزینه: {total:,.3f} $"
+
+    holding = conn.execute(
+        "SELECT quantity FROM crypto WHERE user_id=? AND symbol=?",
+        (user_id, symbol)
+    ).fetchone()
+
+    if not holding or holding["quantity"] + 1e-12 < quantity:
+        conn.close()
+        return "❌ مقدار کافی از این رمزارز در دارایی شما نیست."
+
+    conn.execute(
+        "UPDATE players SET coins=coins+? WHERE user_id=?",
+        (int(total), user_id)
+    )
+    new_qty = holding["quantity"] - quantity
+    conn.execute(
+        "UPDATE crypto SET quantity=? WHERE user_id=? AND symbol=?",
+        (max(0, new_qty), user_id, symbol)
+    )
+    conn.commit()
+    conn.close()
+    return f"✅ فروش انجام شد.\n{quantity:g} {symbol}\n💵 دریافتی: {total:,.3f} $"
+
+
+# -------------------- Inventory --------------------
+
+def inventory_text(user_id):
+    conn = db()
+    rows = conn.execute(
+        """
+        SELECT item_id, item_name, quantity
+        FROM inventory
+        WHERE user_id=? AND quantity>0
+        ORDER BY rowid
+        """,
+        (user_id,)
+    ).fetchall()
+    conn.close()
+
+    if not rows:
+        return (
+            "📦 انبار\n\n"
+            "انبار خالی است.\n\n"
+            "آیتم‌هایی که از فروشگاه یا بازار سیاه بخری اینجا اضافه می‌شوند."
+        )
+
+    lines = ["📦 انبار\n"]
+    for row in rows:
+        lines.append(
+            f"• {row['item_name']} ×{row['quantity']}  [{row['item_id']}]"
+        )
+    lines += [
+        "",
+        "فروش به ربات: فروش <id>",
+        "مثال: فروش SW001",
+    ]
+    return "\n".join(lines)
+
+
+def inventory_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("💵 فروش آیتم", callback_data="inventory_sell_help")],
+        [InlineKeyboardButton("🔙 برگشت", callback_data="home")],
+    ])
+
+
+def sell_inventory_item(user_id, item_id):
+    item_id = item_id.upper()
+    conn = db()
+    row = conn.execute(
+        """
+        SELECT item_name, quantity
+        FROM inventory
+        WHERE user_id=? AND item_id=? AND quantity>0
+        """,
+        (user_id, item_id)
+    ).fetchone()
+
+    if not row:
+        conn.close()
+        return "❌ این آیتم در انبار شما پیدا نشد."
+
+    # Inventory sale uses half of the displayed black-market/store purchase price when known.
+    price = 1000
+    for iid, _, p, _ in BLACK_MARKET:
+        if iid == item_id:
+            price = p // 2
+            break
+
+    conn.execute(
+        "UPDATE inventory SET quantity=quantity-1 WHERE user_id=? AND item_id=?",
+        (user_id, item_id)
+    )
+    conn.execute(
+        "UPDATE players SET coins=coins+? WHERE user_id=?",
+        (price, user_id)
+    )
+    conn.commit()
+    conn.close()
+
+    return f"✅ {row['item_name']} فروخته شد.\n💵 دریافتی: {price:,} $"
+
+
+# -------------------- Black market --------------------
+
+def black_market_text():
+    return (
+        "🏴 بازار سیاه — 64 آیتم\n\n"
+        "برای سرج بنویس: سرچ شمشیر\n"
+        "خرید با کد: SW001"
+    )
+
+
+def black_market_keyboard():
+    rows = []
+    for item_id, name, price, emoji in BLACK_MARKET:
+        style = "🟢" if item_id != "MUG01" else "🔴"
+        rows.append([
+            InlineKeyboardButton(
+                f"{style} {emoji} {name} — 💵 {price:,}",
+                callback_data=f"blackbuy:{item_id}"
+            )
+        ])
+    rows.append([InlineKeyboardButton("منو 🔙", callback_data="home")])
+    return InlineKeyboardMarkup(rows)
+
+
+def buy_black_market(user_id, item_id):
+    selected = next((x for x in BLACK_MARKET if x[0] == item_id), None)
+    if not selected:
+        return "❌ آیتم پیدا نشد."
+
+    item_id, name, price, emoji = selected
+
+    conn = db()
+    row = conn.execute(
+        "SELECT coins FROM players WHERE user_id=?",
+        (user_id,)
+    ).fetchone()
+
+    if not row or row["coins"] < price:
+        conn.close()
+        return "❌ موجودی کافی نیست."
+
+    conn.execute(
+        "UPDATE players SET coins=coins-? WHERE user_id=?",
+        (price, user_id)
+    )
+    conn.execute(
+        """
+        INSERT INTO inventory(user_id,item_id,item_name,quantity)
+        VALUES(?,?,?,1)
+        ON CONFLICT(user_id,item_id)
+        DO UPDATE SET quantity=quantity+1
+        """,
+        (user_id, item_id, f"{emoji} {name}")
+    )
+    conn.commit()
+    conn.close()
+
+    return f"✅ {name} خریداری شد.\n📦 به انبار اضافه شد.\n💸 قیمت: {price:,} $"
+
+
+# -------------------- Dark web --------------------
+
+def dark_web_text():
+    return (
+        "دارک وب 🕸️\n\n"
+        "برای استفاده توی گروه روی پیام طرف ریپلای کن و بنویس:\n"
+        "• اجیر قاتل — هزینه: $10,000 (از موجودی)\n"
+        "• اجیر هکر — هزینه: $20,000 (از بانک)\n\n"
+        "هر دو 30٪ شانس لو رفتن و جریمه دارن. اگه طرف بیمه باشه فقط 10٪ برداشت میشه."
+    )
+
+
+def dark_web_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔪 اجیر قاتل — $10,000", callback_data="dark_assassin")],
+        [InlineKeyboardButton("💻 اجیر هکر — $20,000", callback_data="dark_hacker")],
+        [InlineKeyboardButton("منو 🔙", callback_data="home")],
+    ])
+
+
+# -------------------- Clan --------------------
+
+def clan_text():
+    return (
+        "🏳️ راهنمای کلن\n"
+        "• ساخت کلن <اسم> — $40,000\n"
+        "• جوین <اسم کلن> — درخواست عضویت\n"
+        "• کلن <اسم> — کارت کلن (رهبر/معاون: مدیریت اعضا و خزانه)\n"
+        "• واریز کلن <مبلغ> / برداشت کلن <مبلغ>\n"
+        "• چالش کلن — پله‌های امتیاز و جایزه‌ها\n"
+        "• اعلام جنگ کلن <اسم کلن> — فقط رهبر/معاون\n"
+        "• حمله / دفاع — هر ۲۵ دقیقه یک بار\n"
+        "• رتبه کلن‌ها — جدول جهانی\n"
+        "• خروج از کلن / انحلال کلن"
+    )
+
+
+def clan_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🏳️ ساخت کلن", callback_data="clan_create_help")],
+        [InlineKeyboardButton("🏳️ جوین کلن", callback_data="clan_join_help")],
+        [InlineKeyboardButton("📋 کارت کلن", callback_data="clan_card_help")],
+        [InlineKeyboardButton("💰 خزانه کلن", callback_data="clan_treasury_help")],
+        [InlineKeyboardButton("🏆 چالش کلن", callback_data="clan_challenge_help")],
+        [InlineKeyboardButton("⚔️ جنگ کلن", callback_data="clan_war_help")],
+        [InlineKeyboardButton("🌍 رتبه کلن‌ها", callback_data="clan_rank_help")],
+        [InlineKeyboardButton("🚪 خروج / انحلال", callback_data="clan_leave_help")],
+        [InlineKeyboardButton("منو 🔙", callback_data="home")],
+    ])
+
+
+# -------------------- Help --------------------
+
+def help_text():
+    return (
+        "💾 راهنمای ربات آقایون\n\n"
+        "روی هر دسته بزن تا دستوراتش رو ببینی."
+    )
+
+
+def help_keyboard():
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🏳️ کلن", callback_data="help_clan"),
+            InlineKeyboardButton("💲 درآمد رایگان", callback_data="help_income"),
+        ],
+        [
+            InlineKeyboardButton("🎮 بازی‌ها", callback_data="help_games"),
+            InlineKeyboardButton("💰 پول و بانک", callback_data="help_money"),
+        ],
+        [
+            InlineKeyboardButton("🏠 سرمایه‌گذاری", callback_data="help_invest"),
+            InlineKeyboardButton("🛒 فروشگاه و بازار", callback_data="help_store"),
+        ],
+        [
+            InlineKeyboardButton("💜 اجتماعی و خانواده", callback_data="help_social"),
+            InlineKeyboardButton("🥷 دزدی و دارک وب", callback_data="help_crime"),
+        ],
+        [
+            InlineKeyboardButton("🚀 موشک", callback_data="help_rocket"),
+            InlineKeyboardButton("🏆 سایر", callback_data="help_other"),
+        ],
+        [InlineKeyboardButton("منو اصلی 🔙", callback_data="home")],
+    ])
+
+
+HELP_DETAILS = {
+    "help_clan": "🏳️ کلن\nساخت کلن، جوین، کارت کلن، خزانه، چالش، جنگ، رتبه و خروج.",
+    "help_income": "💲 درآمد رایگان\nبخش کسب درآمد و جمع‌آوری درآمد.",
+    "help_games": "🎮 بازی‌ها\nبازی‌ها و سرگرمی‌های داخل OceanGame.",
+    "help_money": "💰 پول و بانک\nموجودی، سپرده، برداشت و سود بانک.",
+    "help_invest": "🏠 سرمایه‌گذاری\nبخش سرمایه‌گذاری و مدیریت دارایی.",
+    "help_store": "🛒 فروشگاه و بازار\nخرید آیتم‌ها و انتقال آن‌ها به انبار.",
+    "help_social": "💜 اجتماعی و خانواده\nامکانات اجتماعی بازی.",
+    "help_crime": "🥷 دزدی و دارک وب\nدستورات مربوط به بخش دارک وب بازی.",
+    "help_rocket": "🚀 موشک\nبخش موشک.",
+    "help_other": "🏆 سایر\nسایر امکانات ربات.",
+}
+
+
+# -------------------- Callback handler --------------------
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -111,67 +848,55 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "profile":
         text = (
-            f"👤 {p['name']}\n\n"
+            f"👤 {p['name']}\n"
             f"💲 موجودی: $ {p['coins']:,}\n"
             f"🏦 بانک: $ {p['bank']:,}\n"
             f"💰 مجموع: $ {p['coins'] + p['bank']:,}\n"
             f"🏷️ سطح: نوب (لول {p['level']})"
         )
-    elif data == "bank":
-        text = (
-            "🏦 بانک\n\n"
-            "راهنما:\n"
-            "سپرده + مبلغ\n"
-            "مثال: سپرده 500\n\n"
-            f"💲 موجودی: $ {p['coins']:,}\n"
-            f"🏦 بانک: $ {p['bank']:,}"
-        )
-    elif data == "income":
-        text = (
+        await q.edit_message_text(text, reply_markup=back_menu())
+        return
+
+    if data == "bank":
+        await q.edit_message_text(bank_text(user.id), reply_markup=bank_keyboard())
+        return
+
+    if data.startswith("bank_deposit:"):
+        amount = int(data.split(":")[1])
+        ok, message = deposit_amount(user.id, amount)
+        await q.answer(message, show_alert=True)
+        await q.edit_message_text(bank_text(user.id), reply_markup=bank_keyboard())
+        return
+
+    if data == "bank_withdraw":
+        message = withdraw_bank(user.id)
+        await q.answer(message, show_alert=True)
+        await q.edit_message_text(bank_text(user.id), reply_markup=bank_keyboard())
+        return
+
+    if data == "income":
+        await q.edit_message_text(
             "🏠 کسب درآمد\n\n"
             "روی هر مورد بزن تا جزئیاتشو ببینی.\n"
-            "درآمد جمع شده: 💵 0 $"
+            "درآمد جمع شده: 💵 0 $",
+            reply_markup=income_keyboard()
         )
-        income_keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🏪 سوپرمارکت — +8,000/۵س", callback_data="income_supermarket")],
-            [InlineKeyboardButton("🍽️ رستوران — +16,000/۵س", callback_data="income_restaurant")],
-            [InlineKeyboardButton("🥖 نانوایی — +28,000/۵س", callback_data="income_bakery")],
-            [InlineKeyboardButton("🌾 مزرعه آرد — +48,000/۵س", callback_data="income_flour_farm")],
-            [InlineKeyboardButton("🏭 کارخانه — +74,000/۵س", callback_data="income_factory")],
-            [InlineKeyboardButton("🚫 جنده‌خونه — +105,000/۵س", callback_data="income_brothel")],
-            [InlineKeyboardButton("⛏️ معدن آهن — +150,000/۵س", callback_data="income_iron_mine")],
-            [InlineKeyboardButton("⭐ مزرعه تریاک — +220,000/۵س", callback_data="income_opium_farm")],
-            [InlineKeyboardButton("🥙 فلافلی — +300,000/۵س Ocean", callback_data="income_falafel")],
-            [InlineKeyboardButton("🍗 اکبر جوجه — +420,000/۵س", callback_data="income_akbar_jojeh")],
-            [InlineKeyboardButton("💰 برداشت درآمد (0)", callback_data="income_collect")],
-            [InlineKeyboardButton("🔙 برگشت", callback_data="home")],
-        ])
-        await q.edit_message_text(text, reply_markup=income_keyboard)
         return
-    elif data.startswith("income_"):
-        income_details = {
-            "income_supermarket": ("🏪 سوپرمارکت", 8000),
-            "income_restaurant": ("🍽️ رستوران", 16000),
-            "income_bakery": ("🥖 نانوایی", 28000),
-            "income_flour_farm": ("🌾 مزرعه آرد", 48000),
-            "income_factory": ("🏭 کارخانه", 74000),
-            "income_brothel": ("🚫 جنده‌خونه", 105000),
-            "income_iron_mine": ("⛏️ معدن آهن", 150000),
-            "income_opium_farm": ("⭐ مزرعه تریاک", 220000),
-            "income_falafel": ("🥙 فلافلی", 300000),
-            "income_akbar_jojeh": ("🍗 اکبر جوجه", 420000),
-        }
-        if data in income_details:
-            name, amount = income_details[data]
-            text = (
-                f"{name}\n\n"
-                f"💵 درآمد: +{amount:,} $ در هر ۵ ثانیه\n\n"
-                "برای دیدن وضعیت کسب درآمد، به منوی کسب درآمد برگرد."
-            )
-        elif data == "income_collect":
+
+    if data.startswith("income_"):
+        if data == "income_collect":
             text = "💰 برداشت درآمد\n\nفعلاً درآمد قابل برداشت: 0 $"
         else:
-            text = "❌ این گزینه پیدا نشد."
+            item = next((x for x in INCOME_ITEMS if x[0] == data), None)
+            if item:
+                _, name, amount = item
+                text = (
+                    f"{name}\n\n"
+                    f"💵 درآمد: +{amount:,} $ در هر ۵ ثانیه\n\n"
+                    "برای دیدن وضعیت کسب درآمد، به منوی کسب درآمد برگرد."
+                )
+            else:
+                text = "❌ این گزینه پیدا نشد."
         await q.edit_message_text(
             text,
             reply_markup=InlineKeyboardMarkup([
@@ -179,71 +904,220 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ])
         )
         return
-    elif data == "trade":
-        text = "📈 ترید\n\nبازار ترید OceanGame در حال ساخت است."
-    elif data == "cars":
-        text = "🏁 مسابقه / ماشین‌ها\n\nخرید ماشین و مسابقه در این بخش قرار می‌گیرد."
-    elif data == "crypto":
-        text = "💱 صرافی رمزارز\n\nخرید و فروش ارزهای داخل بازی در این بخش قرار می‌گیرد."
-    elif data == "inventory":
-        text = "📦 انبار و فروش\n\nدارایی‌ها و فروش آیتم‌ها در این بخش قرار می‌گیرد."
-    elif data == "shop":
-        text = "🛒 فروشگاه\n\nچی میخوای بخری؟"
-        shop_keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🐾 پت", callback_data="shop_pet")],
-            [InlineKeyboardButton("🚘 وسیله نقلیه", callback_data="shop_vehicle")],
-            [InlineKeyboardButton("🍼 لوازم بچه", callback_data="shop_baby")],
-            [InlineKeyboardButton("🔙 برگشت", callback_data="home")],
-        ])
-        await q.edit_message_text(text, reply_markup=shop_keyboard)
+
+    if data == "trade":
+        text = (
+            "📈 ترید\n"
+            "مبلغ شرط رو انتخاب کن. بازار پرریسکه.\n"
+            "میتونی توی گروه هم بنویسی: ترید 1000"
+        )
+        await q.edit_message_text(text, reply_markup=trade_keyboard())
         return
-    elif data in ("shop_pet", "shop_vehicle", "shop_baby"):
+
+    if data.startswith("trade:"):
+        amount = int(data.split(":")[1])
+        message = run_trade(user.id, amount)
+        await q.answer(message, show_alert=True)
+        await q.edit_message_text(
+            "📈 ترید\n\nمبلغ شرط رو انتخاب کن.",
+            reply_markup=trade_keyboard()
+        )
+        return
+
+    if data == "cars":
+        await q.edit_message_text(cars_text(), reply_markup=cars_keyboard())
+        return
+
+    if data.startswith("car:"):
+        message = buy_car(user.id, data.split(":")[1])
+        await q.answer(message, show_alert=True)
+        await q.edit_message_text(cars_text(), reply_markup=cars_keyboard())
+        return
+
+    if data == "crypto":
+        await q.edit_message_text(
+            crypto_text(user.id),
+            reply_markup=crypto_keyboard()
+        )
+        return
+
+    if data.startswith("crypto_buy:") or data.startswith("crypto_sell:"):
+        side, symbol = data.split(":")
+        price = CRYPTO[symbol]
+        if side == "crypto_buy":
+            message = (
+                f"💵 خرید {symbol}\n"
+                f"قیمت فعلی: {price:g} $\n\n"
+                f"برای مقدار دلخواه بنویس: خرید 0.5 {CRYPTO_NAMES[symbol]}"
+            )
+        else:
+            message = (
+                f"💷 فروش {symbol}\n"
+                f"قیمت فعلی: {price:g} $\n\n"
+                f"برای مقدار دلخواه بنویس: فروش {symbol} 12"
+            )
+        await q.edit_message_text(
+            message,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 برگشت به صرافی", callback_data="crypto")]
+            ])
+        )
+        return
+
+    if data == "inventory":
+        await q.edit_message_text(
+            inventory_text(user.id),
+            reply_markup=inventory_keyboard()
+        )
+        return
+
+    if data == "inventory_sell_help":
+        await q.edit_message_text(
+            "📦 فروش آیتم\n\n"
+            "فرمت: فروش <id>\n"
+            "مثال: فروش SW001",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 برگشت به انبار", callback_data="inventory")]
+            ])
+        )
+        return
+
+    if data == "shop":
+        await q.edit_message_text(
+            "🛒 فروشگاه\n\nچی میخوای بخری؟",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🐾 پت", callback_data="shop_pet")],
+                [InlineKeyboardButton("🚘 وسیله نقلیه", callback_data="shop_vehicle")],
+                [InlineKeyboardButton("🍼 لوازم بچه", callback_data="shop_baby")],
+                [InlineKeyboardButton("🔙 برگشت", callback_data="home")],
+            ])
+        )
+        return
+
+    if data in ("shop_pet", "shop_vehicle", "shop_baby"):
         titles = {
             "shop_pet": "🐾 پت",
             "shop_vehicle": "🚘 وسیله نقلیه",
             "shop_baby": "🍼 لوازم بچه",
         }
-        text = f"{titles[data]}\n\nاین بخش در مرحله بعد تکمیل می‌شود."
         await q.edit_message_text(
-            text,
+            f"{titles[data]}\n\n"
+            "جزئیات این دسته در داده‌های فعلی عکس‌ها مشخص نشده است.",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("🔙 برگشت به فروشگاه", callback_data="shop")]
             ])
         )
         return
-    elif data == "pets":
-        text = "🐾 پت و لوازم\n\nپت‌ها و لوازم جانبی در این بخش قرار می‌گیرند."
-    elif data == "black_market":
-        text = "🏴 بازار سیاه\n\nبخش بازار سیاه بازی در حال ساخت است."
-    elif data == "dark_web":
-        text = "🕸 دارک وب\n\nبخش دارک وب بازی در حال ساخت است."
-    elif data == "clan":
-        text = "🏳️ کلن\n\nبخش کلن و امکانات گروهی در حال ساخت است."
-    elif data == "help":
-        text = (
-            "❓ راهنمای OceanGame\n\n"
-            "منو\n"
-            "موجودی\n"
-            "سپرده 500\n\n"
-            "دستورهای بیشتر با اضافه‌شدن بخش‌های بازی فعال می‌شوند."
-        )
-    elif data == "add_group":
-        text = "➕ برای افزودن OceanGame به گروه، ربات را به گروه موردنظر اضافه کن."
-    else:
-        text = "این بخش هنوز فعال نشده است."
 
-    await q.edit_message_text(text, reply_markup=page_keyboard())
+    if data == "pets":
+        await q.edit_message_text(
+            "🐾 پت و لوازم\n\nپت‌ها و لوازم جانبی در این بخش قرار می‌گیرند.",
+            reply_markup=back_menu()
+        )
+        return
+
+    if data == "black_market":
+        await q.edit_message_text(
+            black_market_text(),
+            reply_markup=black_market_keyboard()
+        )
+        return
+
+    if data.startswith("blackbuy:"):
+        message = buy_black_market(user.id, data.split(":")[1])
+        await q.answer(message, show_alert=True)
+        await q.edit_message_text(
+            black_market_text(),
+            reply_markup=black_market_keyboard()
+        )
+        return
+
+    if data == "dark_web":
+        await q.edit_message_text(
+            dark_web_text(),
+            reply_markup=dark_web_keyboard()
+        )
+        return
+
+    if data in ("dark_assassin", "dark_hacker"):
+        if data == "dark_assassin":
+            text = "🔪 اجیر قاتل\nبرای استفاده، روی پیام طرف ریپلای کن و دستور مربوطه را بفرست."
+        else:
+            text = "💻 اجیر هکر\nبرای استفاده، روی پیام طرف ریپلای کن و دستور مربوطه را بفرست."
+        await q.edit_message_text(
+            text,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 برگشت به دارک وب", callback_data="dark_web")]
+            ])
+        )
+        return
+
+    if data == "clan":
+        await q.edit_message_text(clan_text(), reply_markup=clan_keyboard())
+        return
+
+    if data.startswith("clan_") and data != "clan":
+        await q.answer("این گزینه فعلاً به‌صورت راهنمای کلن نمایش داده می‌شود.", show_alert=True)
+        await q.edit_message_text(clan_text(), reply_markup=clan_keyboard())
+        return
+
+    if data == "help":
+        await q.edit_message_text(help_text(), reply_markup=help_keyboard())
+        return
+
+    if data in HELP_DETAILS:
+        await q.edit_message_text(
+            HELP_DETAILS[data],
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 برگشت به راهنما", callback_data="help")]
+            ])
+        )
+        return
+
+    if data == "add_group":
+        await q.edit_message_text(
+            "➕ افزودن ربات به گروه\n\n"
+            "ربات را به گروه موردنظر اضافه کن و دسترسی‌های لازم را بده.",
+            reply_markup=back_menu()
+        )
+        return
+
+    await q.edit_message_text(
+        "این بخش هنوز فعال نشده است.",
+        reply_markup=back_menu()
+    )
+
+
+# -------------------- Text commands --------------------
+
+def normalize_digits(value):
+    table = str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789")
+    return value.translate(table)
+
+
+def parse_crypto_name(value):
+    value = value.strip().upper()
+    if value in CRYPTO:
+        return value
+    for symbol, name in CRYPTO_NAMES.items():
+        if value == name.upper():
+            return symbol
+    return None
 
 
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
         return
 
-    text = update.message.text.strip()
+    raw = update.message.text.strip()
+    text = normalize_digits(raw)
     user = update.effective_user
 
     if text in {"منو", "مانی", "/menu"}:
-        await update.message.reply_text(home_text(user), reply_markup=main_menu())
+        await update.message.reply_text(
+            home_text(user),
+            reply_markup=main_menu()
+        )
         return
 
     if text == "موجودی":
@@ -260,21 +1134,89 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text.startswith("سپرده "):
         parts = text.split()
         if len(parts) != 2 or not parts[1].isdigit():
-            await update.message.reply_text("❌ فرمت درست: سپرده + مبلغ\nمثال: سپرده 500")
+            await update.message.reply_text(
+                "❌ فرمت درست: سپرده + مبلغ\nمثال: سپرده 500"
+            )
             return
+
         amount = int(parts[1])
         if amount <= 0:
             await update.message.reply_text("❌ مبلغ باید بیشتر از صفر باشد.")
             return
-        p = get_player(user)
-        if p["coins"] < amount:
-            await update.message.reply_text("❌ موجودی نقدی کافی نیست.")
+
+        ok, message = deposit_amount(user.id, amount)
+        await update.message.reply_text(message)
+        return
+
+    # Trade command: ترید 1000
+    if text.startswith("ترید "):
+        parts = text.split()
+        if len(parts) == 2 and parts[1].isdigit():
+            message = run_trade(user.id, int(parts[1]))
+            await update.message.reply_text(message)
+        else:
+            await update.message.reply_text("❌ فرمت: ترید + مبلغ\nمثال: ترید 1000")
+        return
+
+    # Crypto buy command: خرید 0.5 بیتکوین
+    if text.startswith("خرید "):
+        parts = text.split(maxsplit=2)
+        if len(parts) == 3:
+            try:
+                quantity = float(parts[1])
+                symbol = parse_crypto_name(parts[2])
+                if symbol:
+                    await update.message.reply_text(
+                        crypto_trade(user.id, symbol, quantity, "buy")
+                    )
+                    return
+            except ValueError:
+                pass
+
+    # Crypto sell command: فروش OCEAN 12
+    if text.startswith("فروش "):
+        parts = text.split(maxsplit=2)
+        if len(parts) == 3:
+            symbol = parse_crypto_name(parts[1])
+            try:
+                quantity = float(parts[2])
+            except ValueError:
+                quantity = -1
+
+            if symbol and quantity > 0:
+                await update.message.reply_text(
+                    crypto_trade(user.id, symbol, quantity, "sell")
+                )
+                return
+
+        # Inventory sale: فروش SW001
+        parts = text.split()
+        if len(parts) == 2:
+            await update.message.reply_text(
+                sell_inventory_item(user.id, parts[1])
+            )
             return
-        conn = db()
-        conn.execute("UPDATE players SET coins=coins-?, bank=bank+? WHERE user_id=?", (amount, amount, user.id))
-        conn.commit()
-        conn.close()
-        await update.message.reply_text(f"✅ {amount:,} $ به بانک منتقل شد.")
+
+    # Black-market search command from the screenshot.
+    if text.startswith("سرچ "):
+        query = text[5:].strip()
+        matches = [
+            x for x in BLACK_MARKET
+            if query in x[1] or query.upper() in x[0]
+        ]
+        if matches:
+            lines = ["🏴 نتیجه سرچ:\n"]
+            for item_id, name, price, emoji in matches:
+                lines.append(f"{emoji} {name} — {price:,} $ [{item_id}]")
+            await update.message.reply_text("\n".join(lines))
+        else:
+            await update.message.reply_text("❌ موردی پیدا نشد.")
+        return
+
+    # Black-market direct purchase: خرید با کد SW001
+    if text.startswith("خرید با کد "):
+        item_id = text.replace("خرید با کد ", "", 1).strip().upper()
+        await update.message.reply_text(buy_black_market(user.id, item_id))
         return
 
     await update.message.reply_text(
@@ -283,14 +1225,26 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+# -------------------- Start --------------------
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        home_text(update.effective_user),
+        reply_markup=main_menu()
+    )
+
+
 def main():
     if not TOKEN:
         raise RuntimeError("BOT_TOKEN تنظیم نشده است.")
+
     init_db()
+
     app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
+
     print("OceanGame started")
     app.run_polling()
 
