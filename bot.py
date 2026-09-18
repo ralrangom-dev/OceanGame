@@ -291,7 +291,7 @@ def buy_store_item(user_id, item_id):
 
     if int(player["coins"]) < price:
         conn.close()
-        return "موجودی کافی نداری."
+        return f"❌ موجودی کافی نیست.\n💵 قیمت: $ {price:,}"
 
     conn.execute(
         "UPDATE players SET coins=coins-? WHERE user_id=?",
@@ -498,7 +498,7 @@ def run_trade(user_id, amount):
 
     if not row or row["coins"] < amount:
         conn.close()
-        return "موجودی کافی نداری."
+        return "❌ موجودی کافی نیست."
 
     # Simple 50/50 game mechanic; the screenshot only specifies the selectable stakes.
     if random.choice([True, False]):
@@ -554,7 +554,7 @@ def buy_car(user_id, car_id):
 
     if not row or row["coins"] < price:
         conn.close()
-        return "موجودی کافی نداری."
+        return "❌ موجودی کافی نیست."
 
     owned = conn.execute(
         "SELECT 1 FROM cars WHERE user_id=? AND car_id=?",
@@ -637,7 +637,7 @@ def crypto_trade(user_id, symbol, quantity, side):
     if side == "buy":
         if not player or player["coins"] < total:
             conn.close()
-            return "موجودی کافی نداری."
+            return "❌ موجودی کافی نیست."
 
         conn.execute(
             "UPDATE players SET coins=coins-? WHERE user_id=?",
@@ -792,7 +792,7 @@ def buy_black_market(user_id, item_id):
 
     if not row or row["coins"] < price:
         conn.close()
-        return "موجودی کافی نداری."
+        return "❌ موجودی کافی نیست."
 
     conn.execute(
         "UPDATE players SET coins=coins-? WHERE user_id=?",
