@@ -129,6 +129,65 @@ def init_db():
     conn.close()
 
 
+
+# --- خانواده: رابطه و فرزندان ---
+def init_family_tables():
+    with sqlite3.connect(DB_FILE) as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS relationships (
+                user_id INTEGER PRIMARY KEY,
+                partner_id INTEGER,
+                status TEXT DEFAULT 'relationship'
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS children (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                parent1_id INTEGER,
+                parent2_id INTEGER,
+                name TEXT,
+                gender TEXT,
+                created_at INTEGER
+            )
+        """)
+        conn.commit()
+
+init_family_tables()
+
+def family_relationship_text(user_id):
+    with sqlite3.connect(DB_FILE) as conn:
+        row = conn.execute(
+            "SELECT partner_id, status FROM relationships WHERE user_id=?",
+            (user_id,)
+        ).fetchone()
+        if not row:
+            return "❤️ رابطه\n\n❌ در حال حاضر در رابطه نیستید."
+        partner_id, status = row
+        partner = conn.execute(
+            "SELECT name FROM players WHERE user_id=?",
+            (partner_id,)
+        ).fetchone()
+        partner_name = partner[0] if partner else str(partner_id)
+        return f"❤️ رابطه\n\n💞 طرف رابطه: {partner_name}\n📌 وضعیت: {status}"
+
+def family_children_text(user_id):
+    with sqlite3.connect(DB_FILE) as conn:
+        rows = conn.execute(
+            """SELECT name, gender FROM children
+               WHERE parent1_id=? OR parent2_id=?
+               ORDER BY id""",
+            (user_id, user_id)
+        ).fetchall()
+
+    if not rows:
+        return "👶 لیست بچه‌ها\n\n❌ هنوز فرزندی ندارید."
+
+    lines = ["👶 لیست بچه‌ها", ""]
+    for i, (name, gender) in enumerate(rows, 1):
+        icon = "👦" if gender == "پسر" else "👧" if gender == "دختر" else "👶"
+        lines.append(f"{i}. {icon} {name}")
+    return "\n".join(lines)
+
 def get_player(user):
     conn = db()
     row = conn.execute(
@@ -1591,7 +1650,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(wheel_play(user.id))
         return
 
-    if text.startswith("ازدواج ") and update.message.reply_to_message:
+    if text == "ازدواج" and update.message.reply_to_message:
         await update.message.reply_text(marry(user.id, update.message.reply_to_message.from_user.id))
         return
 
@@ -1659,6 +1718,14 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # Crypto buy command: خرید 0.5 بیتکوین
+    if text == "رابطه":
+        await update.message.reply_text(family_relationship_text(user.id))
+        return
+
+    if text in {"بچه ها", "بچه‌ها", "لیست بچه ها", "لیست بچه‌ها"}:
+        await update.message.reply_text(family_children_text(user.id))
+        return
+
     if text.startswith("خرید "):
         parts = text.split(maxsplit=2)
         if len(parts) == 3:
