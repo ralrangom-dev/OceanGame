@@ -33,6 +33,7 @@ def init_db():
             level INTEGER NOT NULL DEFAULT 1,
             bank_profit INTEGER NOT NULL DEFAULT 0,
             bank_last_day INTEGER NOT NULL DEFAULT 0,
+            starter_bonus_given INTEGER NOT NULL DEFAULT 0,
             created_at INTEGER NOT NULL
         )
     """)
@@ -79,12 +80,41 @@ def init_db():
         )
     """)
 
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS gift_codes (
+            code TEXT PRIMARY KEY,
+            amount INTEGER NOT NULL,
+            redeemed_by INTEGER,
+            redeemed_at INTEGER
+        )
+    """)
+
     # Upgrade older OceanGame databases without deleting player data.
     columns = {row["name"] for row in conn.execute("PRAGMA table_info(players)").fetchall()}
     if "bank_profit" not in columns:
         conn.execute("ALTER TABLE players ADD COLUMN bank_profit INTEGER NOT NULL DEFAULT 0")
     if "bank_last_day" not in columns:
         conn.execute("ALTER TABLE players ADD COLUMN bank_last_day INTEGER NOT NULL DEFAULT 0")
+    if "starter_bonus_given" not in columns:
+        conn.execute("ALTER TABLE players ADD COLUMN starter_bonus_given INTEGER NOT NULL DEFAULT 0")
+
+    # Gift codes: each code can be redeemed only once.
+    conn.execute(
+        "INSERT OR IGNORE INTO gift_codes(code, amount) VALUES(?, ?)",
+        ("OCEAN60M-X7K2P9", 60_000_000),
+    )
+    conn.execute(
+        "INSERT OR IGNORE INTO gift_codes(code, amount) VALUES(?, ?)",
+        ("OCEAN600M-Q4N8ZT", 600_000_000),
+    )
+
+    # Give every existing player a one-time 5,000$ starting bonus.
+    rows = conn.execute("SELECT user_id FROM players WHERE starter_bonus_given=0").fetchall()
+    for row in rows:
+        conn.execute(
+            "UPDATE players SET coins = coins + 5000, starter_bonus_given=1 WHERE user_id=?",
+            (row["user_id"],),
+        )
 
     conn.commit()
     conn.close()
@@ -102,18 +132,19 @@ def get_player(user):
             """
             INSERT INTO players(
                 user_id, name, coins, bank, level,
-                bank_profit, bank_last_day, created_at
+                bank_profit, bank_last_day, starter_bonus_given, created_at
             )
-            VALUES(?,?,?,?,?,?,?,?)
+            VALUES(?,?,?,?,?,?,?,?,?)
             """,
             (
                 user.id,
                 user.first_name or "بازیکن",
-                0,
+                5000,
                 0,
                 1,
                 0,
                 int(time.time() // 86400),
+                1,
                 int(time.time()),
             ),
         )
@@ -1397,6 +1428,45 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+# -------------------- Gift codes --------------------
+
+GIFT_CODES = {
+    "OCEAN60M-X7K2P9": 60_000_000,
+    "OCEAN600M-Q4N8ZT": 600_000_000,
+}
+
+
+def redeem_gift_code(user_id, code):
+    code = code.strip().upper()
+    conn = db()
+    row = conn.execute(
+        "SELECT code, amount, redeemed_by FROM gift_codes WHERE code=?",
+        (code,),
+    ).fetchone()
+    if row is None:
+        conn.close()
+        return "❌ کد هدیه نامعتبر است."
+    if row["redeemed_by"] is not None:
+        conn.close()
+        return "❌ این کد هدیه قبلاً استفاده شده است."
+
+    conn.execute(
+        "UPDATE players SET coins = coins + ? WHERE user_id=?",
+        (row["amount"], user_id),
+    )
+    conn.execute(
+        "UPDATE gift_codes SET redeemed_by=?, redeemed_at=? WHERE code=? AND redeemed_by IS NULL",
+        (user_id, int(time.time()), code),
+    )
+    conn.commit()
+    conn.close()
+
+    return (
+        f"کد هدیه {code}\n"
+        f"💰 ${row['amount']:,} دریافت کردی!"
+    )
+
+
 # -------------------- Text commands --------------------
 
 def normalize_digits(value):
@@ -1460,6 +1530,15 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         ok, message = deposit_amount(user.id, amount)
         await update.message.reply_text(message)
+        return
+
+    # Gift code command: کد هدیه CODE
+    if text.startswith("کد هدیه "):
+        code = text.replace("کد هدیه ", "", 1).strip()
+        if not code:
+            await update.message.reply_text("❌ فرمت: کد هدیه + کد")
+            return
+        await update.message.reply_text(redeem_gift_code(user.id, code))
         return
 
     # Transfer command: reply to another user's message and write: انتقال 100
