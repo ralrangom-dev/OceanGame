@@ -168,7 +168,17 @@ def family_relationship_text(user_id):
             (partner_id,)
         ).fetchone()
         partner_name = partner[0] if partner else str(partner_id)
-        return f"❤️ رابطه\n\n💞 همسر: {partner_name}\n💍 وضعیت: متأهل"
+        me = conn.execute(
+            "SELECT name FROM players WHERE user_id=?",
+            (user_id,)
+        ).fetchone()
+        my_name = me[0] if me and me[0] else "کاربر"
+        return (
+            f"❤️ رابطه\n\n"
+            f"🔞 {my_name} و {partner_name} اوقات خوبی و لذت بخشی با هم دارند. 😊\n\n"
+            f"👫 خونه تون پر از بچه است و جا برای بچه جدید نیست — فعلاً از همدیگه مراقبت کنید.\n"
+            f"💰 مجموع $ 500 — نفری +$ 250."
+        )
 
 def family_children_text(user_id):
     with sqlite3.connect(DB_FILE) as conn:
@@ -178,21 +188,45 @@ def family_children_text(user_id):
                ORDER BY id""",
             (user_id, user_id)
         ).fetchall()
+        me = conn.execute(
+            "SELECT name FROM players WHERE user_id=?",
+            (user_id,)
+        ).fetchone()
+
+    my_name = me[0] if me and me[0] else "کاربر"
 
     if not rows:
-        return "👶 بچه ها\n\n❌ هنوز فرزندی ندارید."
+        return (
+            f"🍓 『 {my_name} 』 🍓\n\n"
+            "بچه ها\n\n"
+            "👥 فرزندان تو\n"
+            "❌ هنوز فرزندی نداری."
+        )
 
-    lines = ["👶 بچه ها", "", "👥 فرزندان تو"]
+    lines = [
+        f"🍓 『 {my_name} 』 🍓",
+        "",
+        "بچه ها",
+        "",
+        "👥 فرزندان تو"
+    ]
+
     for child_id, name, gender in rows:
-        icon = "👦" if gender == "پسر" else "👧" if gender == "دختر" else "👶"
         child_name = name or "بدون نام"
-        lines.append(f"• #{child_id} {icon} {child_name}")
-        lines.append("  🏫 مدرسه — شهریه: 600 $")
-        lines.append(f"  📝 اسم: {child_name}")
-        lines.append("  💵 شهریه: برداشت شهریه")
-        lines.append(f"  💸 فروش به کارت: فروش فرزند {child_id} یا اسم")
+        icon = "👦" if gender == "پسر" else "👧" if gender == "دختر" else "👶"
+        display_id = f"{int(child_id):06d}"
+        # نمایشی شبیه نمونه: اطلاعات پایه + شهریه
+        lines.append(f"• #{display_id} {icon} مدرسه — {child_name} — 🎓")
+        lines.append("  💵 شهریه سررسید: 600 $")
         lines.append("")
-    lines.append("نوزاد/کودک: 500 — مدرسه/دانشگاه/بزرگسال: 900")
+
+    lines.extend([
+        "📝 اسم: اسم بچه امیر",
+        "💵 شهریه: برداشت شهریه",
+        "💰 فروش به کارتل: فروش فرزند <آیدی> یا اسم",
+        "",
+        "(نوزاد/کودک: 500 — مدرسه/دانشگاه/بزرگسال: 900)"
+    ])
     return "\n".join(lines)
 
 def get_player(user):
@@ -532,6 +566,8 @@ def income_owned_count(user_id):
 
 
 def income_collectable(user_id):
+    # درآمد به صورت پیوسته محاسبه می‌شود؛ لازم نیست ۵ ساعت کامل صبر شود.
+    # عدد درآمدِ هر ۵ ساعت فقط نرخ پایه است و هر زمان بخشی از آن قابل برداشت است.
     now = int(time.time())
     total = 0
     conn = db()
@@ -541,13 +577,16 @@ def income_collectable(user_id):
     ).fetchall()
     for row in rows:
         last = int(row["last_income"] or now)
-        periods = max(0, (now - last) // INCOME_PERIOD)
-        total += periods * int(row["income"]) * int(row["quantity"])
+        quantity = int(row["quantity"])
+        rate = int(row["income"]) * quantity
+        elapsed = max(0, now - last)
+        total += (elapsed * rate) // INCOME_PERIOD
     conn.close()
     return total
 
 
 def income_collect(user_id):
+    # برداشت در هر زمان آزاد است و محدودیت ۵ ساعته ندارد.
     now = int(time.time())
     total = 0
     conn = db()
@@ -557,10 +596,17 @@ def income_collect(user_id):
     ).fetchall()
     for row in rows:
         last = int(row["last_income"] or now)
-        periods = max(0, (now - last) // INCOME_PERIOD)
-        if periods:
-            total += periods * int(row["income"]) * int(row["quantity"])
-            new_last = last + periods * INCOME_PERIOD
+        quantity = int(row["quantity"])
+        rate = int(row["income"]) * quantity
+        elapsed = max(0, now - last)
+        earned = (elapsed * rate) // INCOME_PERIOD
+        if earned > 0:
+            total += earned
+            # فقط زمانِ معادل درآمد پرداخت‌شده جلو می‌رود تا باقی‌مانده زمان از بین نرود.
+            advance = (earned * INCOME_PERIOD) // rate
+            new_last = last + max(1, advance)
+            if new_last > now:
+                new_last = now
             conn.execute(
                 "UPDATE income_businesses SET last_income=? WHERE user_id=? AND business_id=?",
                 (new_last, user_id, row["business_id"]),
@@ -1577,11 +1623,16 @@ def wheel_play(user_id):
     return f"🎡 گردونه چرخید\n🎁 جایزه: {amount:,} $"
 
 def marry(user_id, partner_id):
-    conn=db()
-    conn.execute("INSERT OR REPLACE INTO marriages(user_id,partner_id) VALUES(?,?)",(user_id,partner_id))
-    conn.execute("INSERT OR REPLACE INTO marriages(user_id,partner_id) VALUES(?,?)",(partner_id,user_id))
-    conn.commit(); conn.close()
-    return "💍 ازدواج انجام شد."
+    conn = db()
+    me = conn.execute("SELECT name FROM players WHERE user_id=?", (user_id,)).fetchone()
+    partner = conn.execute("SELECT name FROM players WHERE user_id=?", (partner_id,)).fetchone()
+    my_name = me[0] if me and me[0] else str(user_id)
+    partner_name = partner[0] if partner and partner[0] else str(partner_id)
+    conn.execute("INSERT OR REPLACE INTO marriages(user_id,partner_id) VALUES(?,?)", (user_id, partner_id))
+    conn.execute("INSERT OR REPLACE INTO marriages(user_id,partner_id) VALUES(?,?)", (partner_id, user_id))
+    conn.commit()
+    conn.close()
+    return f"💍 {partner_name} با {my_name} ازدواج کرد!\n🎉\n💜 مبارکه! زندگی خوبی داشته باشین"
 
 
 def betrayal(user_id):
