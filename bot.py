@@ -90,6 +90,14 @@ def init_db():
         )
     """)
 
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS marriages (
+            user_id INTEGER PRIMARY KEY,
+            partner_id INTEGER NOT NULL,
+            children INTEGER NOT NULL DEFAULT 0
+        )
+    """)
+
     # Upgrade older OceanGame databases without deleting player data.
     columns = {row["name"] for row in conn.execute("PRAGMA table_info(players)").fetchall()}
     if "bank_profit" not in columns:
@@ -1160,6 +1168,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     p = get_player(user)
 
+    if data == "lottery_join":
+        await q.answer(lottery_join(user.id), show_alert=True)
+        return
+
     if data == "profile":
         text = (
             f"👤 {p['name']}\n"
@@ -1473,6 +1485,38 @@ def redeem_gift_code(user_id, code):
     )
 
 
+
+# -------------------- Lottery / Wheel / Family --------------------
+def lottery_text():
+    return "🎟 لاتاری\n\nبا زدن دکمه زیر وارد قرعه کشی شو. هر شرکت یک بلیت است."
+
+def lottery_keyboard():
+    return InlineKeyboardMarkup([[B("🟢 شرکت در لاتاری", "lottery_join", "success")],[B("🔙 منو", "home")]])
+
+def lottery_join(user_id):
+    conn=db()
+    win=random.choice([True,False,False])
+    if win:
+        amount=random.randint(1000,10000)
+        conn.execute("UPDATE players SET coins=coins+? WHERE user_id=?",(amount,user_id))
+        msg=f"🎉 برنده شدی! +{amount:,} $"
+    else:
+        msg="❌ این بار برنده نشدی. دفعه بعد شانس بیار!"
+    conn.commit(); conn.close(); return msg
+
+def wheel_play(user_id):
+    prizes=[1000,5000,10000,50000,100000]
+    amount=random.choice(prizes)
+    conn=db(); conn.execute("UPDATE players SET coins=coins+? WHERE user_id=?",(amount,user_id)); conn.commit(); conn.close()
+    return f"🎡 گردونه چرخید\n🎁 جایزه: {amount:,} $"
+
+def marry(user_id, partner_id):
+    conn=db()
+    conn.execute("INSERT OR REPLACE INTO marriages(user_id,partner_id) VALUES(?,?)",(user_id,partner_id))
+    conn.execute("INSERT OR REPLACE INTO marriages(user_id,partner_id) VALUES(?,?)",(partner_id,user_id))
+    conn.commit(); conn.close()
+    return "💍 ازدواج انجام شد."
+
 # -------------------- Text commands --------------------
 
 def normalize_digits(value):
@@ -1537,6 +1581,18 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         ok, message = deposit_amount(user.id, amount)
         await update.message.reply_text(message)
+        return
+
+    if text == "لاتاری":
+        await update.message.reply_text(lottery_text(), reply_markup=lottery_keyboard())
+        return
+
+    if text == "گردونه":
+        await update.message.reply_text(wheel_play(user.id))
+        return
+
+    if text.startswith("ازدواج ") and update.message.reply_to_message:
+        await update.message.reply_text(marry(user.id, update.message.reply_to_message.from_user.id))
         return
 
     # Gift code command: کد هدیه CODE
