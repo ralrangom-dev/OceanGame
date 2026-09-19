@@ -98,6 +98,15 @@ def init_db():
         )
     """)
 
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS command_cooldowns (
+            user_id INTEGER NOT NULL,
+            command TEXT NOT NULL,
+            last_used INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (user_id, command)
+        )
+    """)
+
     # Upgrade older OceanGame databases without deleting player data.
     columns = {row["name"] for row in conn.execute("PRAGMA table_info(players)").fetchall()}
     if "bank_profit" not in columns:
@@ -716,6 +725,53 @@ def buy_income_business(user_id, business_id):
     return f"✅ {name} خریداری شد.\n💸 پرداخت: $ {price:,}\n📈 درآمد هر ۵ ساعت: $ {income:,}"
 
 
+
+# -------------------- Workers --------------------
+# منوی «کارگرها» مطابق نمونه ارسالی کاربر.
+# نرخ‌ها به صورت درآمد پایه در هر ۵ ساعت نمایش داده می‌شوند.
+WORKER_ITEMS = [
+    ("worker_cook", "👨‍🍳 آشپز", 9500),
+    ("worker_driver", "🚚 راننده", 16000),
+    ("worker_welder", "🔧 جوشکار", 27000),
+    ("worker_miner", "⛏️ معدنچی", 40000),
+    ("worker_dancer", "💃 جندکس", 58000),
+    ("worker_guardian", "👑 قیم", 76000),
+    ("worker_engineer", "👷 مهندس", 110000),
+    ("worker_robot", "🤖 ربات کارگر", 155000),
+    ("worker_elon", "🚀 ایلان ماسک", 200000),
+]
+
+
+def workers_text(user_id):
+    return (
+        "👷 کارگرها\n\n"
+        "📦 تعداد کارگرهای تو: 0 / 9\n"
+        "💰 درآمد جمع‌شده: 0 $\n\n"
+        "روی هر کارگر بزن تا جزئیات و دکمه خرید بیاد."
+    )
+
+
+def workers_keyboard(user_id):
+    rows = []
+    for key, title, income in WORKER_ITEMS:
+        rows.append([B(f"{title} — +{income:,}/۵س", key, "primary")])
+    rows.append([B("💰 برداشت درآمد کارگرها", "workers_collect", "success")])
+    rows.append([B("🔙 برگشت", "home", "primary")])
+    return InlineKeyboardMarkup(rows)
+
+
+def worker_detail_text(worker_id):
+    item = next((x for x in WORKER_ITEMS if x[0] == worker_id), None)
+    if not item:
+        return "❌ این کارگر پیدا نشد."
+    _, title, income = item
+    return (
+        f"{title}\n\n"
+        f"📈 درآمد: +{income:,} $ در هر ۵ ساعت\n"
+        "📦 ظرفیت: ۹ عدد\n\n"
+        "ℹ️ جزئیات خرید این کارگر هنوز در اطلاعات ارسالی مشخص نشده است."
+    )
+
 # -------------------- Trade --------------------
 
 def trade_keyboard():
@@ -1312,6 +1368,25 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text(bank_text(user.id), reply_markup=bank_keyboard(), parse_mode=ParseMode.HTML)
         return
 
+    if data == "workers":
+        await q.edit_message_text(
+            workers_text(user.id),
+            reply_markup=workers_keyboard(user.id)
+        )
+        return
+
+    if data == "workers_collect":
+        await q.answer("ℹ️ هنوز درآمد کارگری برای برداشت ثبت نشده است.", show_alert=True)
+        return
+
+    if data.startswith("worker_"):
+        if any(x[0] == data for x in WORKER_ITEMS):
+            await q.edit_message_text(
+                worker_detail_text(data),
+                reply_markup=InlineKeyboardMarkup([[B("برگشت 🔙", "workers", "primary")]])
+            )
+            return
+
     if data == "income":
         await q.edit_message_text(
             income_text(user.id),
@@ -1598,6 +1673,89 @@ def redeem_gift_code(user_id, code):
 
 
 
+# -------------------- 5-minute command cooldowns --------------------
+COOLDOWN_5_MIN = 5 * 60
+
+def check_command_cooldown(user_id, command):
+    now = int(time.time())
+    conn = db()
+    row = conn.execute(
+        "SELECT last_used FROM command_cooldowns WHERE user_id=? AND command=?",
+        (user_id, command)
+    ).fetchone()
+    if row and now - int(row["last_used"] or 0) < COOLDOWN_5_MIN:
+        remaining = COOLDOWN_5_MIN - (now - int(row["last_used"] or 0))
+        minutes = remaining // 60
+        seconds = remaining % 60
+        conn.close()
+        return False, f"❌ این دستور هر ۵ دقیقه یک‌بار قابل استفاده است.\n⏳ زمان باقی‌مانده: {minutes}:{seconds:02d}"
+    conn.execute(
+        "INSERT OR REPLACE INTO command_cooldowns(user_id,command,last_used) VALUES(?,?,?)",
+        (user_id, command, now)
+    )
+    conn.commit()
+    conn.close()
+    return True, ""
+
+
+def rob_user(thief_id, target_id):
+    if thief_id == target_id:
+        return "❌ نمی‌تونی از خودت دزدی کنی."
+    conn = db()
+    target = conn.execute("SELECT coins, name FROM players WHERE user_id=?", (target_id,)).fetchone()
+    if not target:
+        conn.close()
+        return "❌ کاربر موردنظر پیدا نشد."
+    amount = int(target["coins"] * 0.10)
+    if amount <= 0:
+        conn.close()
+        return "❌ پول نقد قابل سرقتی ندارد."
+    conn.execute("UPDATE players SET coins=coins-? WHERE user_id=?", (amount, target_id))
+    conn.execute("UPDATE players SET coins=coins+? WHERE user_id=?", (amount, thief_id))
+    conn.commit(); conn.close()
+    return f"🥷 دزدی موفق شد!\n💰 {amount:,} $ از {target['name']} به دست آوردی."
+
+
+def hire_attack(hirer_id, target_id, kind):
+    if hirer_id == target_id:
+        return "❌ نمی‌تونی خودت را هدف بگیری."
+    cost = 200_000 if kind == "قاتل" else 400_000
+    # Since no separate penalty amount was specified, the default penalty is the same as the contract cost.
+    penalty = cost
+    conn = db()
+    hirer = conn.execute("SELECT coins FROM players WHERE user_id=?", (hirer_id,)).fetchone()
+    target = conn.execute("SELECT coins, bank, name FROM players WHERE user_id=?", (target_id,)).fetchone()
+    if not hirer or hirer["coins"] < cost:
+        conn.close()
+        return f"❌ برای اجیر {kind} باید {cost:,} $ پول نقد داشته باشی."
+    if not target:
+        conn.close()
+        return "❌ کاربر موردنظر پیدا نشد."
+
+    conn.execute("UPDATE players SET coins=coins-? WHERE user_id=?", (cost, hirer_id))
+    success = random.random() < 0.60
+    if success:
+        stolen = int(target["coins"] if kind == "قاتل" else target["bank"])
+        if stolen > 0:
+            if kind == "قاتل":
+                conn.execute("UPDATE players SET coins=coins-? WHERE user_id=?", (stolen, target_id))
+                conn.execute("UPDATE players SET coins=coins+? WHERE user_id=?", (stolen, hirer_id))
+            else:
+                conn.execute("UPDATE players SET bank=bank-? WHERE user_id=?", (stolen, target_id))
+                conn.execute("UPDATE players SET coins=coins+? WHERE user_id=?", (stolen, hirer_id))
+        conn.commit(); conn.close()
+        source = "موجودی" if kind == "قاتل" else "بانک"
+        return f"🕶️ اجیر {kind} موفق شد!\n🎯 هدف: {target['name']}\n💰 {stolen:,} $ از {source} به دستت رسید."
+
+    conn.execute("UPDATE players SET coins=coins-? WHERE user_id=? AND coins>=?", (penalty, hirer_id, penalty))
+    conn.commit(); conn.close()
+    return f"🚨 اجیر {kind} لو رفت!\n💸 {penalty:,} $ جریمه پرداخت کردی."
+
+
+def play_slide(user_id, amount):
+    # Slide uses the same stake flow as dice; the exact special Slide rules were not specified.
+    return run_dice(user_id, "زوج", amount)
+
 # -------------------- Lottery / Wheel / Family --------------------
 def lottery_text():
     return "🎟 لاتاری\n\nبا زدن دکمه زیر وارد قرعه کشی شو. هر شرکت یک بلیت است."
@@ -1635,17 +1793,34 @@ def marry(user_id, partner_id):
     return f"💍 {partner_name} با {my_name} ازدواج کرد!\n🎉\n💜 مبارکه! زندگی خوبی داشته باشین"
 
 
+def relationship_action(user_id):
+    ok, message = check_command_cooldown(user_id, "رابطه")
+    if not ok:
+        return message
+    conn = db()
+    row = conn.execute("SELECT partner_id FROM marriages WHERE user_id=?", (user_id,)).fetchone()
+    if not row:
+        conn.close()
+        return "❌ برای رابطه باید متأهل باشی."
+    partner_id = row["partner_id"]
+    conn.execute("UPDATE players SET coins = coins + 250 WHERE user_id=?", (user_id,))
+    conn.execute("UPDATE players SET coins = coins + 250 WHERE user_id=?", (partner_id,))
+    conn.commit(); conn.close()
+    return family_relationship_text(user_id)
+
+
 def betrayal(user_id):
+    ok, message = check_command_cooldown(user_id, "خیانت")
+    if not ok:
+        return message
     conn = db()
     row = conn.execute("SELECT partner_id FROM marriages WHERE user_id=?", (user_id,)).fetchone()
     if not row:
         conn.close()
         return "❌ برای خیانت باید متأهل باشی."
     conn.execute("UPDATE players SET coins = coins + 500 WHERE user_id=?", (user_id,))
-    conn.commit()
-    conn.close()
+    conn.commit(); conn.close()
     return "😈 مخفیانه خیانت کرد و 500 $ گرفت. کسی نفهمید... فعلاً"
-
 
 def divorce(user_id):
     conn = db()
@@ -1695,6 +1870,13 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text in {"منو", "مانی", "/menu"}:
         # متن «منو» دقیقاً همان عملکرد /start را اجرا می‌کند.
         await start(update, context)
+        return
+
+    if text == "کارگرها":
+        await update.message.reply_text(
+            workers_text(user.id),
+            reply_markup=workers_keyboard(user.id)
+        )
         return
 
     if text in {"کسب درآمد", "کسب درآمدها"}:
@@ -1816,11 +1998,71 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ فرمت: ترید + مبلغ\nمثال: ترید 1000")
         return
 
-    # Crypto buy command: خرید 0.5 بیتکوین
     if text == "رابطه":
-        await update.message.reply_text(family_relationship_text(user.id))
+        await update.message.reply_text(relationship_action(user.id))
         return
 
+    if text == "جق":
+        ok, message = check_command_cooldown(user.id, "جق")
+        if ok:
+            conn = db(); conn.execute("UPDATE players SET coins=coins+500 WHERE user_id=?", (user.id,)); conn.commit(); conn.close()
+            message = "💰 500 $ گرفتی!"
+        await update.message.reply_text(message)
+        return
+
+    if text == "هاپ":
+        ok, message = check_command_cooldown(user.id, "هاپ")
+        if ok:
+            conn = db(); conn.execute("UPDATE players SET coins=coins+500 WHERE user_id=?", (user.id,)); conn.commit(); conn.close()
+            message = "💰 500 $ گرفتی!"
+        await update.message.reply_text(message)
+        return
+
+    if text == "دزدی":
+        if not update.message.reply_to_message or not update.message.reply_to_message.from_user:
+            await update.message.reply_text("❌ باید روی پیام کاربر موردنظر ریپلای کنی.")
+            return
+        ok, message = check_command_cooldown(user.id, "دزدی")
+        if not ok:
+            await update.message.reply_text(message)
+            return
+        target_user = update.message.reply_to_message.from_user
+        await update.message.reply_text(rob_user(user.id, target_user.id))
+        return
+
+    if text.startswith("اسلایت "):
+        parts = text.split()
+        if len(parts) == 2 and parts[1].isdigit():
+            await update.message.reply_text(play_slide(user.id, int(parts[1])), parse_mode=ParseMode.HTML)
+        else:
+            await update.message.reply_text("❌ فرمت درست: اسلایت + مبلغ")
+        return
+
+    if text == "اجیر قاتل" or text == "اجیر قاتل ":
+        if not update.message.reply_to_message or not update.message.reply_to_message.from_user:
+            await update.message.reply_text("❌ باید روی پیام کاربر موردنظر ریپلای کنی.")
+            return
+        ok, message = check_command_cooldown(user.id, "اجیر قاتل")
+        if not ok:
+            await update.message.reply_text(message)
+            return
+        target_user = update.message.reply_to_message.from_user
+        await update.message.reply_text(hire_attack(user.id, target_user.id, "قاتل"))
+        return
+
+    if text == "اجیر هکر" or text == "اجیر هکر ":
+        if not update.message.reply_to_message or not update.message.reply_to_message.from_user:
+            await update.message.reply_text("❌ باید روی پیام کاربر موردنظر ریپلای کنی.")
+            return
+        ok, message = check_command_cooldown(user.id, "اجیر هکر")
+        if not ok:
+            await update.message.reply_text(message)
+            return
+        target_user = update.message.reply_to_message.from_user
+        await update.message.reply_text(hire_attack(user.id, target_user.id, "هکر"))
+        return
+
+    # Crypto buy command: خرید 0.5 بیتکوین
     if text in {"بچه ها", "بچه‌ها", "لیست بچه ها", "لیست بچه‌ها"}:
         await update.message.reply_text(family_children_text(user.id))
         return
