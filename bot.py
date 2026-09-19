@@ -599,6 +599,89 @@ def run_trade(user_id, amount):
     return message
 
 
+# -------------------- Dice --------------------
+
+def run_dice(user_id, choice, amount):
+    """Play dice with only the زوج (even) choice; the stake amount is variable."""
+    choice = choice.strip()
+    if choice != "زوج":
+        return "❌ فقط می‌تونی «زوج» انتخاب کنی."
+
+    if amount <= 0:
+        return "❌ مبلغ باید بیشتر از صفر باشد."
+
+    conn = db()
+    row = conn.execute(
+        "SELECT coins FROM players WHERE user_id=?",
+        (user_id,)
+    ).fetchone()
+
+    if not row or row["coins"] < amount:
+        conn.close()
+        return "❌ موجودی کافی نیست."
+
+    dice = random.randint(1, 6)
+    actual = "زوج" if dice % 2 == 0 else "فرد"
+
+    if actual == choice:
+        conn.execute(
+            "UPDATE players SET coins=coins+? WHERE user_id=?",
+            (amount, user_id)
+        )
+        message = f"تاس {choice}\n🎰 تاس: {dice} ({actual}) — بردی! +$ {amount:,}"
+    else:
+        conn.execute(
+            "UPDATE players SET coins=coins-? WHERE user_id=?",
+            (amount, user_id)
+        )
+        message = f"تاس {choice}\n🎰 تاس: {dice} ({actual}) — باختی! $ {amount:,}-"
+
+    conn.commit()
+    conn.close()
+    return message
+
+
+# -------------------- Transfer --------------------
+
+def transfer_coins(sender_id, receiver_id, amount):
+    if amount <= 0:
+        return False, "❌ مبلغ باید بیشتر از صفر باشد."
+    if sender_id == receiver_id:
+        return False, "❌ نمی‌تونی به خودت انتقال بدی."
+
+    conn = db()
+    sender = conn.execute(
+        "SELECT * FROM players WHERE user_id=?",
+        (sender_id,)
+    ).fetchone()
+    receiver = conn.execute(
+        "SELECT * FROM players WHERE user_id=?",
+        (receiver_id,)
+    ).fetchone()
+
+    if not sender:
+        conn.close()
+        return False, "❌ حساب فرستنده پیدا نشد."
+    if not receiver:
+        conn.close()
+        return False, "❌ حساب گیرنده پیدا نشد."
+    if int(sender["coins"]) < amount:
+        conn.close()
+        return False, "❌ موجودی کافی نیست."
+
+    conn.execute(
+        "UPDATE players SET coins=coins-? WHERE user_id=?",
+        (amount, sender_id)
+    )
+    conn.execute(
+        "UPDATE players SET coins=coins+? WHERE user_id=?",
+        (amount, receiver_id)
+    )
+    conn.commit()
+    conn.close()
+    return True, None
+
+
 # -------------------- Cars --------------------
 
 def cars_text():
@@ -1331,92 +1414,6 @@ def parse_crypto_name(value):
     return None
 
 
-
-def rob_replied_user(thief_user, target_user):
-    """Steal 10% of the replied user's cash; 70% success / 30% caught."""
-    if not target_user:
-        return "❌ باید روی پیام یک کاربر ریپلای کنی و بنویسی: دزدی"
-
-    if thief_user.id == target_user.id:
-        return "❌ نمی‌تونی از خودت دزدی کنی."
-
-    conn = db()
-    try:
-        thief = conn.execute(
-            "SELECT coins, name FROM players WHERE user_id=?",
-            (thief_user.id,)
-        ).fetchone()
-        target = conn.execute(
-            "SELECT coins, name FROM players WHERE user_id=?",
-            (target_user.id,)
-        ).fetchone()
-
-        if thief is None:
-            conn.execute(
-                """
-                INSERT INTO players(
-                    user_id, name, coins, bank, level,
-                    bank_profit, bank_last_day, created_at
-                ) VALUES(?,?,?,?,?,?,?,?)
-                """,
-                (thief_user.id, thief_user.first_name or "بازیکن", 0, 0, 1, 0,
-                 int(time.time() // 86400), int(time.time()))
-            )
-            thief = conn.execute(
-                "SELECT coins, name FROM players WHERE user_id=?",
-                (thief_user.id,)
-            ).fetchone()
-
-        if target is None:
-            conn.execute(
-                """
-                INSERT INTO players(
-                    user_id, name, coins, bank, level,
-                    bank_profit, bank_last_day, created_at
-                ) VALUES(?,?,?,?,?,?,?,?)
-                """,
-                (target_user.id, target_user.first_name or "بازیکن", 0, 0, 1, 0,
-                 int(time.time() // 86400), int(time.time()))
-            )
-            target = conn.execute(
-                "SELECT coins, name FROM players WHERE user_id=?",
-                (target_user.id,)
-            ).fetchone()
-
-        thief_name = thief["name"]
-        target_name = target["name"]
-        thief_coins = int(thief["coins"])
-        target_coins = int(target["coins"])
-
-        if target_coins <= 0:
-            conn.commit()
-            return f"❌ {target_name} موجودی نقدی ندارد."
-
-        if random.random() < 0.70:
-            stolen = max(1, int(target_coins * 0.10))
-            conn.execute(
-                "UPDATE players SET coins=coins-? WHERE user_id=?",
-                (stolen, target_user.id)
-            )
-            conn.execute(
-                "UPDATE players SET coins=coins+? WHERE user_id=?",
-                (stolen, thief_user.id)
-            )
-            conn.commit()
-            return f"🤑 {thief_name} موقع دزدیدن از {target_name} موفق شد و ${stolen:,} دزدید!"
-
-        fine = min(max(10, int(thief_coins * 0.10)), thief_coins)
-        if fine > 0:
-            conn.execute(
-                "UPDATE players SET coins=coins-? WHERE user_id=?",
-                (fine, thief_user.id)
-            )
-        conn.commit()
-        return f"🚓 گیر {thief_name} موقع دزدیدن از {target_name} ! ${fine:,} جریمه افتاد و"
-    finally:
-        conn.close()
-
-
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
         return
@@ -1428,12 +1425,6 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text in {"منو", "مانی", "/menu"}:
         # متن «منو» دقیقاً همان عملکرد /start را اجرا می‌کند.
         await start(update, context)
-        return
-
-    if text == "دزدی":
-        replied = update.message.reply_to_message
-        target_user = replied.from_user if replied and replied.from_user else None
-        await update.message.reply_text(rob_replied_user(user, target_user))
         return
 
     if text in {"کسب درآمد", "کسب درآمدها"}:
@@ -1469,6 +1460,48 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         ok, message = deposit_amount(user.id, amount)
         await update.message.reply_text(message)
+        return
+
+    # Transfer command: reply to another user's message and write: انتقال 100
+    if text.startswith("انتقال "):
+        parts = text.split()
+        if len(parts) != 2 or not parts[1].isdigit():
+            await update.message.reply_text("❌ فرمت: انتقال + مبلغ\nمثال: انتقال 100")
+            return
+
+        if not update.message.reply_to_message or not update.message.reply_to_message.from_user:
+            await update.message.reply_text("❌ باید روی پیام کاربر موردنظر ریپلای کنی.")
+            return
+
+        amount = int(parts[1])
+        target_user = update.message.reply_to_message.from_user
+        sender = get_player(user)
+        receiver = get_player(target_user)
+
+        ok, error = transfer_coins(user.id, target_user.id, amount)
+        if not ok:
+            await update.message.reply_text(error)
+            return
+
+        await update.message.reply_text(
+            f"انتقال {amount}\n"
+            f"انتقال $ {amount:,} از {sender['name']} به {receiver['name']} ✔️\n"
+            f"یافت."
+        )
+        return
+
+    # Dice command: تاس زوج + مبلغ دلخواه
+    # فقط «زوج» مجاز است؛ مبلغ قابل تغییر است.
+    if text.startswith("تاس "):
+        parts = text.split()
+        if len(parts) == 3 and parts[1] == "زوج" and parts[2].isdigit():
+            await update.message.reply_text(
+                run_dice(user.id, "زوج", int(parts[2]))
+            )
+        else:
+            await update.message.reply_text(
+                "❌ فرمت درست: تاس زوج + مبلغ\nمثال: تاس زوج 100"
+            )
         return
 
     # Trade command: ترید 1000
