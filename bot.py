@@ -506,17 +506,21 @@ def income_text(user_id):
     pending = income_collectable(user_id)
     return (
         "🏠 کسب درآمد\n\n"
-        f"📦 تعداد کسب‌وکارهای تو: {owned} (ظرفیت {INCOME_CAPACITY})\n"
-        f"💵 درآمد قابل برداشت: $ {pending:,}\n\n"
+        f"📦 تعداد کسب‌وکارهای تو: {owned} / {INCOME_CAPACITY}\n"
+        f"💰 درآمد جمع شده: {pending:,} $\n\n"
         "روی هر کسب‌وکار بزن تا جزئیاتش رو ببینی."
     )
 
 
-def income_keyboard():
+def income_keyboard(user_id):
     rows = []
+    total_owned = income_owned_count(user_id)
     for key, title, price, income in INCOME_ITEMS:
+        row = income_row(user_id, key)
+        quantity = int(row["quantity"]) if row else 0
+        count_text = f" ({quantity}×)" if quantity else ""
         rows.append([
-            B(f"{title} — {price:,} $", key, "primary")
+            B(f"{title}{count_text} — {price:,} $", key, "primary")
         ])
     rows.append([B("💰 برداشت درآمد", "income_collect", "success")])
     rows.append([B("🔙 برگشت", "home", "primary")])
@@ -566,9 +570,11 @@ def buy_income_business(user_id, business_id):
         (user_id, business_id),
     ).fetchone()
     quantity = int(row["quantity"]) if row else 0
+
+    # ظرفیت هر کسب‌وکار جداگانه ۹ عدد است.
     if quantity >= INCOME_CAPACITY:
         conn.close()
-        return f"❌ ظرفیت این کسب‌وکار پر است. ظرفیت: {INCOME_CAPACITY}"
+        return f"❌ ظرفیت این کسب‌وکار پر است. ({INCOME_CAPACITY}/{INCOME_CAPACITY})"
     if int(player["coins"]) < price:
         conn.close()
         return f"❌ موجودی کافی نیست.\n💵 قیمت: $ {price:,}"
@@ -1186,7 +1192,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "income":
         await q.edit_message_text(
             income_text(user.id),
-            reply_markup=income_keyboard()
+            reply_markup=income_keyboard(user.id)
         )
         return
 
@@ -1199,7 +1205,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.answer(message, show_alert=True)
         await q.edit_message_text(
             income_text(user.id),
-            reply_markup=income_keyboard()
+            reply_markup=income_keyboard(user.id)
         )
         return
 
@@ -1211,7 +1217,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             income_detail_text(user.id, business_id),
             reply_markup=income_detail_keyboard(
                 business_id,
-                income_owned_count(user.id) < INCOME_CAPACITY
+                (int(income_row(user.id, business_id)["quantity"]) if income_row(user.id, business_id) else 0) < INCOME_CAPACITY
             )
         )
         return
@@ -1223,7 +1229,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 income_detail_text(user.id, business_id),
                 reply_markup=income_detail_keyboard(
                     business_id,
-                    income_owned_count(user.id) < INCOME_CAPACITY
+                    (int(income_row(user.id, business_id)["quantity"]) if income_row(user.id, business_id) else 0) < INCOME_CAPACITY
                 )
             )
         else:
@@ -1501,7 +1507,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text in {"کسب درآمد", "کسب درآمدها"}:
         await update.message.reply_text(
             income_text(user.id),
-            reply_markup=income_keyboard()
+            reply_markup=income_keyboard(user.id)
         )
         return
 
