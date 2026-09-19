@@ -157,35 +157,42 @@ init_family_tables()
 def family_relationship_text(user_id):
     with sqlite3.connect(DB_FILE) as conn:
         row = conn.execute(
-            "SELECT partner_id, status FROM relationships WHERE user_id=?",
+            "SELECT partner_id FROM marriages WHERE user_id=?",
             (user_id,)
         ).fetchone()
         if not row:
             return "❤️ رابطه\n\n❌ در حال حاضر در رابطه نیستید."
-        partner_id, status = row
+        partner_id = row[0]
         partner = conn.execute(
             "SELECT name FROM players WHERE user_id=?",
             (partner_id,)
         ).fetchone()
         partner_name = partner[0] if partner else str(partner_id)
-        return f"❤️ رابطه\n\n💞 طرف رابطه: {partner_name}\n📌 وضعیت: {status}"
+        return f"❤️ رابطه\n\n💞 همسر: {partner_name}\n💍 وضعیت: متأهل"
 
 def family_children_text(user_id):
     with sqlite3.connect(DB_FILE) as conn:
         rows = conn.execute(
-            """SELECT name, gender FROM children
+            """SELECT id, name, gender FROM children
                WHERE parent1_id=? OR parent2_id=?
                ORDER BY id""",
             (user_id, user_id)
         ).fetchall()
 
     if not rows:
-        return "👶 لیست بچه‌ها\n\n❌ هنوز فرزندی ندارید."
+        return "👶 بچه ها\n\n❌ هنوز فرزندی ندارید."
 
-    lines = ["👶 لیست بچه‌ها", ""]
-    for i, (name, gender) in enumerate(rows, 1):
+    lines = ["👶 بچه ها", "", "👥 فرزندان تو"]
+    for child_id, name, gender in rows:
         icon = "👦" if gender == "پسر" else "👧" if gender == "دختر" else "👶"
-        lines.append(f"{i}. {icon} {name}")
+        child_name = name or "بدون نام"
+        lines.append(f"• #{child_id} {icon} {child_name}")
+        lines.append("  🏫 مدرسه — شهریه: 600 $")
+        lines.append(f"  📝 اسم: {child_name}")
+        lines.append("  💵 شهریه: برداشت شهریه")
+        lines.append(f"  💸 فروش به کارت: فروش فرزند {child_id} یا اسم")
+        lines.append("")
+    lines.append("نوزاد/کودک: 500 — مدرسه/دانشگاه/بزرگسال: 900")
     return "\n".join(lines)
 
 def get_player(user):
@@ -1576,6 +1583,39 @@ def marry(user_id, partner_id):
     conn.commit(); conn.close()
     return "💍 ازدواج انجام شد."
 
+
+def betrayal(user_id):
+    conn = db()
+    row = conn.execute("SELECT partner_id FROM marriages WHERE user_id=?", (user_id,)).fetchone()
+    if not row:
+        conn.close()
+        return "❌ برای خیانت باید متأهل باشی."
+    conn.execute("UPDATE players SET coins = coins + 500 WHERE user_id=?", (user_id,))
+    conn.commit()
+    conn.close()
+    return "😈 مخفیانه خیانت کرد و 500 $ گرفت. کسی نفهمید... فعلاً"
+
+
+def divorce(user_id):
+    conn = db()
+    row = conn.execute("SELECT partner_id FROM marriages WHERE user_id=?", (user_id,)).fetchone()
+    if not row:
+        conn.close()
+        return "❌ شما ازدواج نکرده‌اید."
+    partner_id = row[0]
+    me = conn.execute("SELECT coins FROM players WHERE user_id=?", (user_id,)).fetchone()
+    if not me or me[0] < 500:
+        conn.close()
+        return "❌ برای طلاق باید 500 $ مهریه داشته باشی."
+    conn.execute("UPDATE players SET coins = coins - 500 WHERE user_id=?", (user_id,))
+    conn.execute("UPDATE players SET coins = coins + 500 WHERE user_id=?", (partner_id,))
+    conn.execute("DELETE FROM marriages WHERE user_id IN (?,?)", (user_id, partner_id))
+    conn.commit()
+    partner = conn.execute("SELECT name FROM players WHERE user_id=?", (partner_id,)).fetchone()
+    partner_name = partner[0] if partner else str(partner_id)
+    conn.close()
+    return f"💔 از {partner_name} طلاق گرفت و 500 $ مهریه پرداخت کرد."
+
 # -------------------- Text commands --------------------
 
 def normalize_digits(value):
@@ -1652,6 +1692,14 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if text == "ازدواج" and update.message.reply_to_message:
         await update.message.reply_text(marry(user.id, update.message.reply_to_message.from_user.id))
+        return
+
+    if text == "خیانت":
+        await update.message.reply_text(betrayal(user.id))
+        return
+
+    if text == "طلاق":
+        await update.message.reply_text(divorce(user.id))
         return
 
     # Gift code command: کد هدیه CODE
