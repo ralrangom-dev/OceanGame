@@ -1151,7 +1151,6 @@ HELP_DETAILS = {
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
-    await q.answer()
     data = q.data
     user = q.from_user
 
