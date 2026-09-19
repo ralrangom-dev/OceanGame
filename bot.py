@@ -1885,6 +1885,12 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(buy_black_market(user.id, item_id))
         return
 
+    # In groups, ignore ordinary/unknown messages completely so the bot
+    # does not interrupt normal conversations. Unknown text is only reported
+    # in private chats.
+    if update.effective_chat and update.effective_chat.type in {"group", "supergroup"}:
+        return
+
     await update.message.reply_text(
         "❌ این دستور در ربات تعریف نشده است."
     )
