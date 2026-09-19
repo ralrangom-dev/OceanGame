@@ -334,8 +334,8 @@ def home_text(user):
     p = get_player(user)
     return (
         f"👋 سلام {p['name']}\n\n"
-        f"💲 موجودی: {p['coins']:,} $\n"
-        f"🏦 بانک: {p['bank']:,} $\n"
+        f"💲 موجودی: $ {p['coins']:,}\n"
+        f"🏦 بانک: $ {p['bank']:,}\n"
         f"🏷️ سطح: نوب\n\n"
         "از منوی زیر استفاده کن:"
     )
@@ -665,7 +665,7 @@ def run_dice(user_id, choice, amount):
             "UPDATE players SET coins=coins-? WHERE user_id=?",
             (amount, user_id)
         )
-        message = f"تاس {choice}\n🎰 تاس: {dice} ({actual}) — باختی! $ {amount:,}-"
+        message = f"تاس {choice}\n🎰 تاس: {dice} ({actual}) — باختی! -$ {amount:,}"
 
     conn.commit()
     conn.close()
@@ -1158,8 +1158,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = (
             f"👤 {p['name']}\n"
             f"💵 موجودی: {p['coins']:,} $\n"
-            f"🏦 بانک: {p['bank']:,} $\n"
-            f"💰 مجموع: {p['coins'] + p['bank']:,} $\n"
+            f"🏦 بانک: $ {p['bank']:,}\n"
+            f"💰 مجموع: $ {p['coins'] + p['bank']:,}\n"
             f"🏷️ سطح: نوب (لول {p['level']})"
         )
         await q.edit_message_text(text, reply_markup=back_menu())
@@ -1463,7 +1463,7 @@ def redeem_gift_code(user_id, code):
 
     return (
         f"کد هدیه {code}\n"
-        f"💰 {row['amount']:,} $ دریافت کردی!"
+        f"💰 ${row['amount']:,} دریافت کردی!"
     )
 
 
@@ -1508,9 +1508,9 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         p = get_player(user)
         await update.message.reply_text(
             f"👤 {p['name']}\n"
-            f"💲 موجودی: {p['coins']:,} $\n"
-            f"🏦 بانک: {p['bank']:,} $\n"
-            f"💰 مجموع: {p['coins'] + p['bank']:,} $\n"
+            f"💲 موجودی: $ {p['coins']:,}\n"
+            f"🏦 بانک: $ {p['bank']:,}\n"
+            f"💰 مجموع: $ {p['coins'] + p['bank']:,}\n"
             f"🏷️ سطح: نوب (لول {p['level']})"
         )
         return
