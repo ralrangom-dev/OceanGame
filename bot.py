@@ -1886,8 +1886,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     await update.message.reply_text(
-        "دستور را نشناختم. برای دیدن منوی OceanGame بنویس: منو",
-        reply_markup=main_menu()
+        "❌ این دستور در ربات تعریف نشده است."
     )
 
 
