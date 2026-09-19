@@ -3,6 +3,7 @@ import sqlite3
 import time
 import random
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, ContextTypes, filters
 
 # Telegram inline-button styles: primary=blue, success=green, danger=red.
@@ -334,8 +335,8 @@ def home_text(user):
     p = get_player(user)
     return (
         f"👋 سلام {p['name']}\n\n"
-        f"💲 موجودی: {p['coins']:,} $\n"
-        f"🏦 بانک: {p['bank']:,} $\n"
+        f"💲 موجودی: <b>{p['coins']:,}</b> $\n"
+        f"🏦 بانک: <b>{p['bank']:,}</b> $\n"
         f"🏷️ سطح: نوب\n\n"
         "از منوی زیر استفاده کن:"
     )
@@ -352,9 +353,9 @@ def bank_text(user_id):
     return (
         "🏦 بانک\n"
         "سود روزانه: 1%\n\n"
-        f"💵 موجودی نقدی: {p['coins']:,} $\n"
-        f"🏦 موجودی بانک: {p['bank']:,} $\n"
-        f"📈 سود انباشته: {p['bank_profit']:,} $\n"
+        f"💵 موجودی نقدی: <b>{p['coins']:,}</b> $\n"
+        f"🏦 موجودی بانک: <b>{p['bank']:,}</b> $\n"
+        f"📈 سود انباشته: <b>{p['bank_profit']:,}</b> $\n"
         "💸 آماده برداشت"
     )
 
@@ -659,13 +660,13 @@ def run_dice(user_id, choice, amount):
             "UPDATE players SET coins=coins+? WHERE user_id=?",
             (amount, user_id)
         )
-        message = f"تاس {choice}\n🎰 تاس: {dice} ({actual}) — بردی! +{amount:,} $"
+        message = f"تاس {choice}\n🎰 تاس: {dice} ({actual}) — بردی! +<b>{amount:,}</b> $"
     else:
         conn.execute(
             "UPDATE players SET coins=coins-? WHERE user_id=?",
             (amount, user_id)
         )
-        message = f"تاس {choice}\n🎰 تاس: {dice} ({actual}) — باختی! -{amount:,} $"
+        message = f"تاس {choice}\n🎰 تاس: {dice} ({actual}) — باختی! -<b>{amount:,}</b> $"
 
     conn.commit()
     conn.close()
@@ -1149,7 +1150,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = q.from_user
 
     if data == "home":
-        await q.edit_message_text(home_text(user), reply_markup=main_menu())
+        await q.edit_message_text(home_text(user), reply_markup=main_menu(), parse_mode=ParseMode.HTML)
         return
 
     p = get_player(user)
@@ -1157,29 +1158,29 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "profile":
         text = (
             f"👤 {p['name']}\n"
-            f"💵 موجودی: {p['coins']:,} $\n"
-            f"🏦 بانک: {p['bank']:,} $\n"
-            f"💰 مجموع: {p['coins'] + p['bank']:,} $\n"
+            f"💵 موجودی: <b>{p['coins']:,}</b> $\n"
+            f"🏦 بانک: <b>{p['bank']:,}</b> $\n"
+            f"💰 مجموع: <b>{p['coins'] + p['bank']:,}</b> $\n"
             f"🏷️ سطح: نوب (لول {p['level']})"
         )
-        await q.edit_message_text(text, reply_markup=back_menu())
+        await q.edit_message_text(text, reply_markup=back_menu(), parse_mode=ParseMode.HTML)
         return
 
     if data == "bank":
-        await q.edit_message_text(bank_text(user.id), reply_markup=bank_keyboard())
+        await q.edit_message_text(bank_text(user.id), reply_markup=bank_keyboard(), parse_mode=ParseMode.HTML)
         return
 
     if data.startswith("bank_deposit:"):
         amount = int(data.split(":")[1])
         ok, message = deposit_amount(user.id, amount)
         await q.answer(message, show_alert=True)
-        await q.edit_message_text(bank_text(user.id), reply_markup=bank_keyboard())
+        await q.edit_message_text(bank_text(user.id), reply_markup=bank_keyboard(), parse_mode=ParseMode.HTML)
         return
 
     if data == "bank_withdraw":
         message = withdraw_bank(user.id)
         await q.answer(message, show_alert=True)
-        await q.edit_message_text(bank_text(user.id), reply_markup=bank_keyboard())
+        await q.edit_message_text(bank_text(user.id), reply_markup=bank_keyboard(), parse_mode=ParseMode.HTML)
         return
 
     if data == "income":
@@ -1463,7 +1464,7 @@ def redeem_gift_code(user_id, code):
 
     return (
         f"کد هدیه {code}\n"
-        f"💰 {row['amount']:,} $ دریافت کردی!"
+        f"💰 <b>{row['amount']:,}</b> $ دریافت کردی!"
     )
 
 
@@ -1508,10 +1509,11 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         p = get_player(user)
         await update.message.reply_text(
             f"👤 {p['name']}\n"
-            f"💲 موجودی: {p['coins']:,} $\n"
-            f"🏦 بانک: {p['bank']:,} $\n"
-            f"💰 مجموع: {p['coins'] + p['bank']:,} $\n"
-            f"🏷️ سطح: نوب (لول {p['level']})"
+            f"💲 موجودی: <b>{p['coins']:,}</b> $\n"
+            f"🏦 بانک: <b>{p['bank']:,}</b> $\n"
+            f"💰 مجموع: <b>{p['coins'] + p['bank']:,}</b> $\n"
+            f"🏷️ سطح: نوب (لول {p['level']})",
+            parse_mode=ParseMode.HTML
         )
         return
 
@@ -1538,7 +1540,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not code:
             await update.message.reply_text("❌ فرمت: کد هدیه + کد")
             return
-        await update.message.reply_text(redeem_gift_code(user.id, code))
+        await update.message.reply_text(redeem_gift_code(user.id, code), parse_mode=ParseMode.HTML)
         return
 
     # Transfer command: reply to another user's message and write: انتقال 100
@@ -1564,8 +1566,9 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await update.message.reply_text(
             f"انتقال {amount}\n"
-            f"انتقال $ {amount:,} از {sender['name']} به {receiver['name']} ✔️\n"
-            f"یافت."
+            f"انتقال <b>{amount:,}</b> $ از {sender['name']} به {receiver['name']} ✔️\n"
+            f"یافت.",
+            parse_mode=ParseMode.HTML
         )
         return
 
@@ -1575,7 +1578,8 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parts = text.split()
         if len(parts) == 3 and parts[1] == "زوج" and parts[2].isdigit():
             await update.message.reply_text(
-                run_dice(user.id, "زوج", int(parts[2]))
+                run_dice(user.id, "زوج", int(parts[2])),
+                parse_mode=ParseMode.HTML
             )
         else:
             await update.message.reply_text(
@@ -1665,7 +1669,8 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         home_text(update.effective_user),
-        reply_markup=main_menu()
+        reply_markup=main_menu(),
+        parse_mode=ParseMode.HTML
     )
 
 
