@@ -334,8 +334,8 @@ def home_text(user):
     p = get_player(user)
     return (
         f"👋 سلام {p['name']}\n\n"
-        f"💲 موجودی: $ {p['coins']:,}\n"
-        f"🏦 بانک: $ {p['bank']:,}\n"
+        f"💲 موجودی: {p['coins']:,} $\n"
+        f"🏦 بانک: {p['bank']:,} $\n"
         f"🏷️ سطح: نوب\n\n"
         "از منوی زیر استفاده کن:"
     )
@@ -352,9 +352,9 @@ def bank_text(user_id):
     return (
         "🏦 بانک\n"
         "سود روزانه: 1%\n\n"
-        f"💵 موجودی نقدی: $ {p['coins']:,}\n"
-        f"🏦 موجودی بانک: $ {p['bank']:,}\n"
-        f"📈 سود انباشته: $ {p['bank_profit']:,}\n"
+        f"💵 موجودی نقدی: {p['coins']:,} $\n"
+        f"🏦 موجودی بانک: {p['bank']:,} $\n"
+        f"📈 سود انباشته: {p['bank_profit']:,} $\n"
         "💸 آماده برداشت"
     )
 
@@ -659,13 +659,13 @@ def run_dice(user_id, choice, amount):
             "UPDATE players SET coins=coins+? WHERE user_id=?",
             (amount, user_id)
         )
-        message = f"تاس {choice}\n🎰 تاس: {dice} ({actual}) — بردی! +$ {amount:,}"
+        message = f"تاس {choice}\n🎰 تاس: {dice} ({actual}) — بردی! +{amount:,} $"
     else:
         conn.execute(
             "UPDATE players SET coins=coins-? WHERE user_id=?",
             (amount, user_id)
         )
-        message = f"تاس {choice}\n🎰 تاس: {dice} ({actual}) — باختی! -$ {amount:,}"
+        message = f"تاس {choice}\n🎰 تاس: {dice} ({actual}) — باختی! -{amount:,} $"
 
     conn.commit()
     conn.close()
@@ -1062,8 +1062,8 @@ def dark_web_text():
     return (
         "دارک وب 🕸️\n\n"
         "برای استفاده توی گروه روی پیام طرف ریپلای کن و بنویس:\n"
-        "• اجیر قاتل — هزینه: $10,000 (از موجودی)\n"
-        "• اجیر هکر — هزینه: $20,000 (از بانک)\n\n"
+        "• اجیر قاتل — هزینه: 10,000 $ (از موجودی)\n"
+        "• اجیر هکر — هزینه: 20,000 $ (از بانک)\n\n"
         "هر دو 30٪ شانس لو رفتن و جریمه دارن. اگه طرف بیمه باشه فقط 10٪ برداشت میشه."
     )
 
@@ -1077,7 +1077,7 @@ def dark_web_keyboard():
 def clan_text():
     return (
         "🏳️ راهنمای کلن\n"
-        "• ساخت کلن <اسم> — $40,000\n"
+        "• ساخت کلن <اسم> — 40,000 $\n"
         "• جوین <اسم کلن> — درخواست عضویت\n"
         "• کلن <اسم> — کارت کلن (رهبر/معاون: مدیریت اعضا و خزانه)\n"
         "• واریز کلن <مبلغ> / برداشت کلن <مبلغ>\n"
@@ -1158,8 +1158,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = (
             f"👤 {p['name']}\n"
             f"💵 موجودی: {p['coins']:,} $\n"
-            f"🏦 بانک: $ {p['bank']:,}\n"
-            f"💰 مجموع: $ {p['coins'] + p['bank']:,}\n"
+            f"🏦 بانک: {p['bank']:,} $\n"
+            f"💰 مجموع: {p['coins'] + p['bank']:,} $\n"
             f"🏷️ سطح: نوب (لول {p['level']})"
         )
         await q.edit_message_text(text, reply_markup=back_menu())
@@ -1463,7 +1463,7 @@ def redeem_gift_code(user_id, code):
 
     return (
         f"کد هدیه {code}\n"
-        f"💰 ${row['amount']:,} دریافت کردی!"
+        f"💰 {row['amount']:,} $ دریافت کردی!"
     )
 
 
@@ -1508,9 +1508,9 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         p = get_player(user)
         await update.message.reply_text(
             f"👤 {p['name']}\n"
-            f"💲 موجودی: $ {p['coins']:,}\n"
-            f"🏦 بانک: $ {p['bank']:,}\n"
-            f"💰 مجموع: $ {p['coins'] + p['bank']:,}\n"
+            f"💲 موجودی: {p['coins']:,} $\n"
+            f"🏦 بانک: {p['bank']:,} $\n"
+            f"💰 مجموع: {p['coins'] + p['bank']:,} $\n"
             f"🏷️ سطح: نوب (لول {p['level']})"
         )
         return
