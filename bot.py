@@ -201,7 +201,39 @@ def get_player(user):
     conn.close()
 
     apply_bank_interest(user.id)
+    sync_player_level(user.id)
     return get_player_raw(user.id)
+
+
+def player_level_from_coins(coins):
+    coins = int(coins or 0)
+    if coins >= 1_000_000_000_000:
+        return 8, "تریلیونر"
+    if coins >= 100_000_000_000:
+        return 7, "میلیاردر"
+    if coins >= 10_000_000_000:
+        return 6, "سلطان"
+    if coins >= 1_000_000_000:
+        return 5, "افسانه‌ای"
+    if coins >= 100_000_000:
+        return 4, "پرو لجند"
+    if coins >= 10_000_000:
+        return 3, "لجند"
+    if coins >= 1_000_000:
+        return 2, "پرو"
+    return 1, "نوب"
+
+
+def sync_player_level(user_id):
+    conn = db()
+    row = conn.execute("SELECT coins FROM players WHERE user_id=?", (user_id,)).fetchone()
+    if row is None:
+        conn.close()
+        return
+    level, _ = player_level_from_coins(row["coins"])
+    conn.execute("UPDATE players SET level=? WHERE user_id=?", (level, user_id))
+    conn.commit()
+    conn.close()
 
 
 def get_player_raw(user_id):
@@ -351,9 +383,9 @@ CHARGE_REWARD = 50
 def hop_charge_text(user_id):
     p = get_player_raw(user_id)
     return (
-        "🔋 تبدیل هاپ به شارژ\n\n"
+        "📶 تبدیل هاپ به شارژ\n\n"
         f"💰 هاپ موجود: {p['coins']:,} $\n"
-        f"🔋 شارژ فعلی: {p['charges']:,}\n\n"
+        f"📶 شارژ فعلی: {p['charges']:,}\n\n"
         "📌 هر 50,000,000 هاپ = 50 شارژ\n"
         "برای تبدیل، دکمه زیر را بزن."
     )
@@ -379,7 +411,7 @@ def convert_hop_to_charge(user_id):
     )
     conn.commit()
     conn.close()
-    return f"✅ تبدیل انجام شد!\n💰 {hop_amount:,} هاپ → 🔋 {charge_amount:,} شارژ"
+    return f"✅ تبدیل انجام شد!\n💰 {hop_amount:,} هاپ → 📶 {charge_amount:,} شارژ"
 
 
 # -------------------- Main menu --------------------
@@ -405,16 +437,17 @@ def main_menu():
         ],
         [B("🕸️ دارک وب", "dark_web", "primary")],
         [B("🏳️ کلن", "clan", "primary")],
-        [B("🔋 تبدیل هاپ به شارژ", "hop_charge", "primary")],
+        [B("📶 تبدیل هاپ به شارژ", "hop_charge", "primary")],
         [B("➕ افزودن ربات به گروه", "add_group", "success")],
     ])
 def home_text(user):
     p = get_player(user)
+    _, level_name = player_level_from_coins(p["coins"])
     return (
         f"👋 سلام {p['name']}\n\n"
         f"💲 موجودی: {p['coins']:,} $\n"
         f"🏦 بانک: {p['bank']:,} $\n"
-        f"🏷️ سطح: نوب\n\n"
+        f"🏷️ سطح: {level_name}\n\n"
         "از منوی زیر استفاده کن:"
     )
 def back_menu():
@@ -1490,12 +1523,13 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     p = get_player(user)
 
     if data == "profile":
+        _, level_name = player_level_from_coins(p["coins"])
         text = (
             f"👤 {p['name']}\n"
             f"💵 موجودی: {p['coins']:,} $\n"
             f"🏦 بانک: {p['bank']:,} $\n"
             f"💰 مجموع: {p['coins'] + p['bank']:,} $\n"
-            f"🏷️ سطح: نوب (لول {p['level']})"
+            f"🏷️ سطح: {level_name} (لول {p['level']})"
         )
         await q.edit_message_text(text, reply_markup=back_menu())
         return
@@ -1763,7 +1797,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "hop_charge":
         await q.edit_message_text(
-            "🔋 تبدیل هاپ به شارژ\n\n"
+            "📶 تبدیل هاپ به شارژ\n\n"
             "📱 اپراتور خود را انتخاب کن:",
             reply_markup=InlineKeyboardMarkup([
                 [B("ایرانسل", "charge_irancell", "primary")],
@@ -1774,12 +1808,76 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    if data in {"charge_irancell", "charge_mci", "charge_rightel"}:
+        operator_names = {
+            "charge_irancell": "ایرانسل",
+            "charge_mci": "همراه اول",
+            "charge_rightel": "رایتل",
+        }
+        operator = operator_names[data]
+        p = get_player_raw(user.id)
+        text = (
+            f"📱 اپراتور: {operator}\n\n"
+            f"📶 موجودی شارژ: {p['charges']:,}\n"
+            f"💰 موجودی سکه بازی: {p['coins']:,} $"
+        )
+        await q.edit_message_text(
+            text,
+            reply_markup=InlineKeyboardMarkup([
+                [B("📶 تبدیل 50,000,000 به شارژ", f"charge_convert:{data}", "success")],
+                [B("📤 برداشت شارژ", f"charge_withdraw:{data}", "primary")],
+                [B("🔙 برگشت", "hop_charge", "primary")],
+            ])
+        )
+        return
+
+    if data.startswith("charge_convert:"):
+        operator_key = data.split(":", 1)[1]
+        message = convert_hop_to_charge(user.id)
+        operator_names = {
+            "charge_irancell": "ایرانسل",
+            "charge_mci": "همراه اول",
+            "charge_rightel": "رایتل",
+        }
+        operator = operator_names.get(operator_key, "اپراتور")
+        p = get_player_raw(user.id)
+        text = (
+            f"📱 اپراتور: {operator}\n\n"
+            f"{message}\n\n"
+            f"📶 موجودی شارژ: {p['charges']:,}\n"
+            f"💰 موجودی سکه بازی: {p['coins']:,} $"
+        )
+        await q.edit_message_text(
+            text,
+            reply_markup=InlineKeyboardMarkup([
+                [B("📶 تبدیل 50,000,000 به شارژ", f"charge_convert:{operator_key}", "success")],
+                [B("📤 برداشت شارژ", f"charge_withdraw:{operator_key}", "primary")],
+                [B("🔙 برگشت", "hop_charge", "primary")],
+            ])
+        )
+        return
+
+    if data.startswith("charge_withdraw:"):
+        operator_key = data.split(":", 1)[1]
+        operator_names = {
+            "charge_irancell": "ایرانسل",
+            "charge_mci": "همراه اول",
+            "charge_rightel": "رایتل",
+        }
+        operator = operator_names.get(operator_key, "اپراتور")
+        p = get_player_raw(user.id)
+        await q.answer(
+            f"📤 موجودی قابل برداشت برای {operator}: {p['charges']:,} شارژ",
+            show_alert=True
+        )
+        return
+
     if data == "hop_charge_convert":
         message = convert_hop_to_charge(user.id)
         await q.edit_message_text(
             f"{message}\n\n{hop_charge_text(user.id)}",
             reply_markup=InlineKeyboardMarkup([
-                [B("🔋 تبدیل 50,000,000 هاپ → 50 شارژ", "hop_charge_convert", "success")],
+                [B("📶 تبدیل 50,000,000 هاپ → 50 شارژ", "hop_charge_convert", "success")],
                 [B("🔙 منو اصلی", "home", "primary")],
             ])
         )
@@ -1913,12 +2011,13 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if text == "موجودی":
         p = get_player(user)
+        _, level_name = player_level_from_coins(p["coins"])
         await update.message.reply_text(
             f"👤 {p['name']}\n"
             f"💲 موجودی: {p['coins']:,} $\n"
             f"🏦 بانک: {p['bank']:,} $\n"
             f"💰 مجموع: {p['coins'] + p['bank']:,} $\n"
-            f"🏷️ سطح: نوب (لول {p['level']})"
+            f"🏷️ سطح: {level_name} (لول {p['level']})"
         )
         return
 
