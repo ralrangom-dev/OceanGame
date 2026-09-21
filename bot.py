@@ -111,6 +111,13 @@ def init_db():
         )
     """)
 
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS insurance (
+            user_id INTEGER PRIMARY KEY,
+            expires_at INTEGER NOT NULL DEFAULT 0
+        )
+    """)
+
     lottery_state = conn.execute("SELECT id FROM lottery_state WHERE id=1").fetchone()
     if lottery_state is None:
         conn.execute(
@@ -1306,7 +1313,85 @@ def buy_black_market(user_id, item_id):
     return f"✅ {name} خریداری شد.\n📦 به انبار اضافه شد.\n💸 قیمت: {price:,} $"
 
 
+# -------------------- Insurance --------------------
+
+INSURANCE_PLANS = {
+    "insurance_7": ("بیمه 7 روزه", 1_000_000, 7 * 24 * 60 * 60),
+    "insurance_30": ("بیمه 1 ماهه", 10_000_000, 30 * 24 * 60 * 60),
+}
+
+def insurance_text(user_id):
+    conn = db()
+    row = conn.execute("SELECT expires_at FROM insurance WHERE user_id=?", (user_id,)).fetchone()
+    conn.close()
+    now = int(time.time())
+    if row and row["expires_at"] > now:
+        remaining = row["expires_at"] - now
+        days = remaining // 86400
+        hours = (remaining % 86400) // 3600
+        status = f"بیمه فعال است — {days} روز و {hours} ساعت باقی مانده"
+    else:
+        status = "بیمه فعال نیست"
+    return f"بیمه\n\n{status}\n\nبیمه موردنظر را انتخاب کن:"
+
+
+def insurance_keyboard():
+    return InlineKeyboardMarkup([
+        [B("بیمه 7 روزه — 1,000,000 سکه بازی", "insurance_buy:7", "primary")],
+        [B("بیمه 1 ماهه — 10,000,000 سکه بازی", "insurance_buy:30", "primary")],
+        [B("منو اصلی", "home", "primary")],
+    ])
+
+def buy_insurance(user_id, days):
+    plan = INSURANCE_PLANS.get("insurance_7" if days == 7 else "insurance_30")
+    if not plan:
+        return "❌ این بیمه پیدا نشد."
+    name, price, duration = plan
+    now = int(time.time())
+    conn = db()
+    row = conn.execute("SELECT coins FROM players WHERE user_id=?", (user_id,)).fetchone()
+    if not row or row["coins"] < price:
+        conn.close()
+        return f"❌ سکه کافی نیست.\n💰 قیمت: {price:,} سکه بازی"
+    current = conn.execute("SELECT expires_at FROM insurance WHERE user_id=?", (user_id,)).fetchone()
+    base = max(now, current["expires_at"]) if current else now
+    expires_at = base + duration
+    conn.execute("UPDATE players SET coins=coins-? WHERE user_id=?", (price, user_id))
+    conn.execute("INSERT INTO insurance(user_id, expires_at) VALUES(?, ?) ON CONFLICT(user_id) DO UPDATE SET expires_at=excluded.expires_at", (user_id, expires_at))
+    conn.commit()
+    conn.close()
+    return f"✅ {name} خریداری شد.\n💰 هزینه: {price:,} سکه بازی"
+
+
 # -------------------- Dark web --------------------
+
+def insurance_reimburse_loss(user_id, loss_amount):
+    """Return 60% of a qualifying loss when the user's insurance is active."""
+    loss_amount = max(0, int(loss_amount))
+    if loss_amount <= 0:
+        return 0
+
+    conn = db()
+    row = conn.execute(
+        "SELECT expires_at FROM insurance WHERE user_id=?",
+        (user_id,),
+    ).fetchone()
+    now = int(time.time())
+
+    if not row or int(row["expires_at"] or 0) <= now:
+        conn.close()
+        return 0
+
+    refund = int(loss_amount * 0.60)
+    if refund > 0:
+        conn.execute(
+            "UPDATE players SET coins=coins+? WHERE user_id=?",
+            (refund, user_id),
+        )
+        conn.commit()
+    conn.close()
+    return refund
+
 
 def dark_web_text():
     return (
@@ -1314,7 +1399,7 @@ def dark_web_text():
         "برای استفاده توی گروه روی پیام طرف ریپلای کن و بنویس:\n"
         "• اجیر قاتل — هزینه: 10,000 $ (از موجودی)\n"
         "• اجیر هکر — هزینه: 20,000 $ (از بانک)\n\n"
-        "هر دو 30٪ شانس لو رفتن و جریمه دارن. اگه طرف بیمه باشه فقط 10٪ برداشت میشه."
+        "هر دو 30٪ شانس لو رفتن و جریمه دارن. اگه طرف بیمه داشته باشه، 60٪ خسارت دزدی/اجیر هکر/اجیر قاتل بهش برگردانده میشه."
     )
 
 
@@ -1665,12 +1750,26 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text(clan_text(), reply_markup=clan_keyboard())
         return
 
+    if data == "insurance":
+        await q.edit_message_text(insurance_text(user.id), reply_markup=insurance_keyboard())
+        return
+
+    if data.startswith("insurance_buy:"):
+        days = int(data.split(":", 1)[1])
+        message = buy_insurance(user.id, days)
+        await q.answer(message, show_alert=True)
+        await q.edit_message_text(insurance_text(user.id), reply_markup=insurance_keyboard())
+        return
+
     if data == "hop_charge":
         await q.edit_message_text(
-            hop_charge_text(user.id),
+            "🔋 تبدیل هاپ به شارژ\n\n"
+            "📱 اپراتور خود را انتخاب کن:",
             reply_markup=InlineKeyboardMarkup([
-                [B("🔋 تبدیل 50,000,000 هاپ → 50 شارژ", "hop_charge_convert", "success")],
-                [B("🔙 منو اصلی", "home", "primary")],
+                [B("ایرانسل", "charge_irancell", "primary")],
+                [B("همراه اول", "charge_mci", "primary")],
+                [B("رایتل", "charge_rightel", "primary")],
+                [B("منو اصلی", "home", "primary")],
             ])
         )
         return
@@ -1785,6 +1884,11 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text in {"منو", "مانی", "/menu"}:
         # متن «منو» دقیقاً همان عملکرد /start را اجرا می‌کند.
         await start(update, context)
+        return
+
+    if text == "بیمه":
+        get_player(user)
+        await update.message.reply_text(insurance_text(user.id), reply_markup=insurance_keyboard())
         return
 
     if text == "لاتاری":
@@ -1957,10 +2061,8 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(buy_black_market(user.id, item_id))
         return
 
-    await update.message.reply_text(
-        "دستور را نشناختم. برای دیدن منوی OceanGame بنویس: منو",
-        reply_markup=main_menu()
-    )
+    # Unknown text commands are ignored silently.
+    return
 
 
 # -------------------- Start --------------------
