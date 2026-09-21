@@ -3,7 +3,6 @@ import sqlite3
 import time
 import random
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, ContextTypes, filters
 
 # Telegram inline-button styles: primary=blue, success=green, danger=red.
@@ -91,21 +90,33 @@ def init_db():
     """)
 
     conn.execute("""
-        CREATE TABLE IF NOT EXISTS marriages (
+        CREATE TABLE IF NOT EXISTS lottery_tickets (
             user_id INTEGER PRIMARY KEY,
-            partner_id INTEGER NOT NULL,
-            children INTEGER NOT NULL DEFAULT 0
+            purchased_at INTEGER NOT NULL
         )
     """)
 
     conn.execute("""
-        CREATE TABLE IF NOT EXISTS command_cooldowns (
-            user_id INTEGER NOT NULL,
-            command TEXT NOT NULL,
-            last_used INTEGER NOT NULL DEFAULT 0,
-            PRIMARY KEY (user_id, command)
+        CREATE TABLE IF NOT EXISTS lottery_state (
+            id INTEGER PRIMARY KEY CHECK (id=1),
+            draw_at INTEGER NOT NULL,
+            prize INTEGER NOT NULL DEFAULT 1000000
         )
     """)
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS wheel_spins (
+            user_id INTEGER PRIMARY KEY,
+            last_spin INTEGER NOT NULL DEFAULT 0
+        )
+    """)
+
+    lottery_state = conn.execute("SELECT id FROM lottery_state WHERE id=1").fetchone()
+    if lottery_state is None:
+        conn.execute(
+            "INSERT INTO lottery_state(id,draw_at,prize) VALUES(1,?,?)",
+            (int(time.time()) + 24 * 60 * 60, 1_000_000),
+        )
 
     # Upgrade older OceanGame databases without deleting player data.
     columns = {row["name"] for row in conn.execute("PRAGMA table_info(players)").fetchall()}
@@ -115,6 +126,8 @@ def init_db():
         conn.execute("ALTER TABLE players ADD COLUMN bank_last_day INTEGER NOT NULL DEFAULT 0")
     if "starter_bonus_given" not in columns:
         conn.execute("ALTER TABLE players ADD COLUMN starter_bonus_given INTEGER NOT NULL DEFAULT 0")
+    if "charges" not in columns:
+        conn.execute("ALTER TABLE players ADD COLUMN charges INTEGER NOT NULL DEFAULT 0")
 
     # Gift codes: each code can be redeemed only once.
     conn.execute(
@@ -137,106 +150,6 @@ def init_db():
     conn.commit()
     conn.close()
 
-
-
-# --- خانواده: رابطه و فرزندان ---
-def init_family_tables():
-    with sqlite3.connect(DB_FILE) as conn:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS relationships (
-                user_id INTEGER PRIMARY KEY,
-                partner_id INTEGER,
-                status TEXT DEFAULT 'relationship'
-            )
-        """)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS children (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                parent1_id INTEGER,
-                parent2_id INTEGER,
-                name TEXT,
-                gender TEXT,
-                created_at INTEGER
-            )
-        """)
-        conn.commit()
-
-init_family_tables()
-
-def family_relationship_text(user_id):
-    with sqlite3.connect(DB_FILE) as conn:
-        row = conn.execute(
-            "SELECT partner_id FROM marriages WHERE user_id=?",
-            (user_id,)
-        ).fetchone()
-        if not row:
-            return "❤️ رابطه\n\n❌ در حال حاضر در رابطه نیستید."
-        partner_id = row[0]
-        partner = conn.execute(
-            "SELECT name FROM players WHERE user_id=?",
-            (partner_id,)
-        ).fetchone()
-        partner_name = partner[0] if partner else str(partner_id)
-        me = conn.execute(
-            "SELECT name FROM players WHERE user_id=?",
-            (user_id,)
-        ).fetchone()
-        my_name = me[0] if me and me[0] else "کاربر"
-        return (
-            f"❤️ رابطه\n\n"
-            f"🔞 {my_name} و {partner_name} اوقات خوبی و لذت بخشی با هم دارند. 😊\n\n"
-            f"👫 خونه تون پر از بچه است و جا برای بچه جدید نیست — فعلاً از همدیگه مراقبت کنید.\n"
-            f"💰 مجموع $ 500 — نفری +$ 250."
-        )
-
-def family_children_text(user_id):
-    with sqlite3.connect(DB_FILE) as conn:
-        rows = conn.execute(
-            """SELECT id, name, gender FROM children
-               WHERE parent1_id=? OR parent2_id=?
-               ORDER BY id""",
-            (user_id, user_id)
-        ).fetchall()
-        me = conn.execute(
-            "SELECT name FROM players WHERE user_id=?",
-            (user_id,)
-        ).fetchone()
-
-    my_name = me[0] if me and me[0] else "کاربر"
-
-    if not rows:
-        return (
-            f"🍓 『 {my_name} 』 🍓\n\n"
-            "بچه ها\n\n"
-            "👥 فرزندان تو\n"
-            "❌ هنوز فرزندی نداری."
-        )
-
-    lines = [
-        f"🍓 『 {my_name} 』 🍓",
-        "",
-        "بچه ها",
-        "",
-        "👥 فرزندان تو"
-    ]
-
-    for child_id, name, gender in rows:
-        child_name = name or "بدون نام"
-        icon = "👦" if gender == "پسر" else "👧" if gender == "دختر" else "👶"
-        display_id = f"{int(child_id):06d}"
-        # نمایشی شبیه نمونه: اطلاعات پایه + شهریه
-        lines.append(f"• #{display_id} {icon} مدرسه — {child_name} — 🎓")
-        lines.append("  💵 شهریه سررسید: 600 $")
-        lines.append("")
-
-    lines.extend([
-        "📝 اسم: اسم بچه امیر",
-        "💵 شهریه: برداشت شهریه",
-        "💰 فروش به کارتل: فروش فرزند <آیدی> یا اسم",
-        "",
-        "(نوزاد/کودک: 500 — مدرسه/دانشگاه/بزرگسال: 900)"
-    ])
-    return "\n".join(lines)
 
 def get_player(user):
     conn = db()
@@ -424,6 +337,46 @@ SHOP_ITEMS = {
 
 # -------------------- Main menu --------------------
 
+HOP_TO_CHARGE_RATE = 50_000_000
+CHARGE_REWARD = 50
+
+
+def hop_charge_text(user_id):
+    p = get_player_raw(user_id)
+    return (
+        "🔋 تبدیل هاپ به شارژ\n\n"
+        f"💰 هاپ موجود: {p['coins']:,} $\n"
+        f"🔋 شارژ فعلی: {p['charges']:,}\n\n"
+        "📌 هر 50,000,000 هاپ = 50 شارژ\n"
+        "برای تبدیل، دکمه زیر را بزن."
+    )
+
+
+def convert_hop_to_charge(user_id):
+    conn = db()
+    row = conn.execute("SELECT coins, charges FROM players WHERE user_id=?", (user_id,)).fetchone()
+    if row is None:
+        conn.close()
+        return "❌ بازیکن پیدا نشد."
+
+    bundles = row["coins"] // HOP_TO_CHARGE_RATE
+    if bundles < 1:
+        conn.close()
+        return "❌ برای تبدیل حداقل 50,000,000 هاپ لازم داری."
+
+    hop_amount = bundles * HOP_TO_CHARGE_RATE
+    charge_amount = bundles * CHARGE_REWARD
+    conn.execute(
+        "UPDATE players SET coins=coins-?, charges=charges+? WHERE user_id=?",
+        (hop_amount, charge_amount, user_id),
+    )
+    conn.commit()
+    conn.close()
+    return f"✅ تبدیل انجام شد!\n💰 {hop_amount:,} هاپ → 🔋 {charge_amount:,} شارژ"
+
+
+# -------------------- Main menu --------------------
+
 def main_menu():
     return InlineKeyboardMarkup([
         [B("👤 پروفایل / موجودی", "profile", "primary")],
@@ -445,15 +398,15 @@ def main_menu():
         ],
         [B("🕸️ دارک وب", "dark_web", "primary")],
         [B("🏳️ کلن", "clan", "primary")],
-        [B("❓ راهنما", "help", "primary")],
+        [B("🔋 تبدیل هاپ به شارژ", "hop_charge", "primary")],
         [B("➕ افزودن ربات به گروه", "add_group", "success")],
     ])
 def home_text(user):
     p = get_player(user)
     return (
         f"👋 سلام {p['name']}\n\n"
-        f"💲 موجودی: <b>{p['coins']:,}</b> $\n"
-        f"🏦 بانک: <b>{p['bank']:,}</b> $\n"
+        f"💲 موجودی: {p['coins']:,} $\n"
+        f"🏦 بانک: {p['bank']:,} $\n"
         f"🏷️ سطح: نوب\n\n"
         "از منوی زیر استفاده کن:"
     )
@@ -470,9 +423,9 @@ def bank_text(user_id):
     return (
         "🏦 بانک\n"
         "سود روزانه: 1%\n\n"
-        f"💵 موجودی نقدی: <b>{p['coins']:,}</b> $\n"
-        f"🏦 موجودی بانک: <b>{p['bank']:,}</b> $\n"
-        f"📈 سود انباشته: <b>{p['bank_profit']:,}</b> $\n"
+        f"💵 موجودی نقدی: {p['coins']:,} $\n"
+        f"🏦 موجودی بانک: {p['bank']:,} $\n"
+        f"📈 سود انباشته: {p['bank_profit']:,} $\n"
         "💸 آماده برداشت"
     )
 
@@ -575,8 +528,6 @@ def income_owned_count(user_id):
 
 
 def income_collectable(user_id):
-    # درآمد به صورت پیوسته محاسبه می‌شود؛ لازم نیست ۵ ساعت کامل صبر شود.
-    # عدد درآمدِ هر ۵ ساعت فقط نرخ پایه است و هر زمان بخشی از آن قابل برداشت است.
     now = int(time.time())
     total = 0
     conn = db()
@@ -586,16 +537,13 @@ def income_collectable(user_id):
     ).fetchall()
     for row in rows:
         last = int(row["last_income"] or now)
-        quantity = int(row["quantity"])
-        rate = int(row["income"]) * quantity
-        elapsed = max(0, now - last)
-        total += (elapsed * rate) // INCOME_PERIOD
+        periods = max(0, (now - last) // INCOME_PERIOD)
+        total += periods * int(row["income"]) * int(row["quantity"])
     conn.close()
     return total
 
 
 def income_collect(user_id):
-    # برداشت در هر زمان آزاد است و محدودیت ۵ ساعته ندارد.
     now = int(time.time())
     total = 0
     conn = db()
@@ -605,17 +553,10 @@ def income_collect(user_id):
     ).fetchall()
     for row in rows:
         last = int(row["last_income"] or now)
-        quantity = int(row["quantity"])
-        rate = int(row["income"]) * quantity
-        elapsed = max(0, now - last)
-        earned = (elapsed * rate) // INCOME_PERIOD
-        if earned > 0:
-            total += earned
-            # فقط زمانِ معادل درآمد پرداخت‌شده جلو می‌رود تا باقی‌مانده زمان از بین نرود.
-            advance = (earned * INCOME_PERIOD) // rate
-            new_last = last + max(1, advance)
-            if new_last > now:
-                new_last = now
+        periods = max(0, (now - last) // INCOME_PERIOD)
+        if periods:
+            total += periods * int(row["income"]) * int(row["quantity"])
+            new_last = last + periods * INCOME_PERIOD
             conn.execute(
                 "UPDATE income_businesses SET last_income=? WHERE user_id=? AND business_id=?",
                 (new_last, user_id, row["business_id"]),
@@ -635,21 +576,17 @@ def income_text(user_id):
     pending = income_collectable(user_id)
     return (
         "🏠 کسب درآمد\n\n"
-        f"📦 تعداد کسب‌وکارهای تو: {owned} / {INCOME_CAPACITY}\n"
-        f"💰 درآمد جمع شده: {pending:,} $\n\n"
+        f"📦 تعداد کسب‌وکارهای تو: {owned} (ظرفیت {INCOME_CAPACITY})\n"
+        f"💵 درآمد قابل برداشت: $ {pending:,}\n\n"
         "روی هر کسب‌وکار بزن تا جزئیاتش رو ببینی."
     )
 
 
-def income_keyboard(user_id):
+def income_keyboard():
     rows = []
-    total_owned = income_owned_count(user_id)
     for key, title, price, income in INCOME_ITEMS:
-        row = income_row(user_id, key)
-        quantity = int(row["quantity"]) if row else 0
-        count_text = f" ({quantity}×)" if quantity else ""
         rows.append([
-            B(f"{title}{count_text} — {price:,} $", key, "primary")
+            B(f"{title} — {price:,} $", key, "primary")
         ])
     rows.append([B("💰 برداشت درآمد", "income_collect", "success")])
     rows.append([B("🔙 برگشت", "home", "primary")])
@@ -699,11 +636,9 @@ def buy_income_business(user_id, business_id):
         (user_id, business_id),
     ).fetchone()
     quantity = int(row["quantity"]) if row else 0
-
-    # ظرفیت هر کسب‌وکار جداگانه ۹ عدد است.
     if quantity >= INCOME_CAPACITY:
         conn.close()
-        return f"❌ ظرفیت این کسب‌وکار پر است. ({INCOME_CAPACITY}/{INCOME_CAPACITY})"
+        return f"❌ ظرفیت این کسب‌وکار پر است. ظرفیت: {INCOME_CAPACITY}"
     if int(player["coins"]) < price:
         conn.close()
         return f"❌ موجودی کافی نیست.\n💵 قیمت: $ {price:,}"
@@ -725,52 +660,184 @@ def buy_income_business(user_id, business_id):
     return f"✅ {name} خریداری شد.\n💸 پرداخت: $ {price:,}\n📈 درآمد هر ۵ ساعت: $ {income:,}"
 
 
+# -------------------- Lottery / Wheel --------------------
 
-# -------------------- Workers --------------------
-# منوی «کارگرها» مطابق نمونه ارسالی کاربر.
-# نرخ‌ها به صورت درآمد پایه در هر ۵ ساعت نمایش داده می‌شوند.
-WORKER_ITEMS = [
-    ("worker_cook", "👨‍🍳 آشپز", 9500),
-    ("worker_driver", "🚚 راننده", 16000),
-    ("worker_welder", "🔧 جوشکار", 27000),
-    ("worker_miner", "⛏️ معدنچی", 40000),
-    ("worker_dancer", "💃 جندکس", 58000),
-    ("worker_guardian", "👑 قیم", 76000),
-    ("worker_engineer", "👷 مهندس", 110000),
-    ("worker_robot", "🤖 ربات کارگر", 155000),
-    ("worker_elon", "🚀 ایلان ماسک", 200000),
-]
+LOTTERY_TICKET_PRICE = 100
+LOTTERY_PRIZE = 1_000_000
+LOTTERY_PERIOD = 24 * 60 * 60
 
 
-def workers_text(user_id):
+def lottery_state():
+    conn = db()
+    row = conn.execute(
+        "SELECT draw_at, prize FROM lottery_state WHERE id=1"
+    ).fetchone()
+    if row is None:
+        draw_at = int(time.time()) + LOTTERY_PERIOD
+        conn.execute(
+            "INSERT INTO lottery_state(id,draw_at,prize) VALUES(1,?,?)",
+            (draw_at, LOTTERY_PRIZE),
+        )
+        conn.commit()
+        row = {"draw_at": draw_at, "prize": LOTTERY_PRIZE}
+    conn.close()
+    return int(row["draw_at"]), int(row["prize"])
+
+
+def lottery_finish_round_if_needed():
+    now = int(time.time())
+    conn = db()
+    state = conn.execute(
+        "SELECT draw_at, prize FROM lottery_state WHERE id=1"
+    ).fetchone()
+    if state is None:
+        conn.execute(
+            "INSERT INTO lottery_state(id,draw_at,prize) VALUES(1,?,?)",
+            (now + LOTTERY_PERIOD, LOTTERY_PRIZE),
+        )
+        conn.commit()
+        conn.close()
+        return None
+
+    if now < int(state["draw_at"]):
+        conn.close()
+        return None
+
+    winner = conn.execute(
+        "SELECT user_id FROM lottery_tickets ORDER BY RANDOM() LIMIT 1"
+    ).fetchone()
+    prize = int(state["prize"])
+    winner_id = int(winner["user_id"]) if winner else None
+
+    if winner_id is not None:
+        conn.execute(
+            "UPDATE players SET coins=coins+? WHERE user_id=?",
+            (prize, winner_id),
+        )
+
+    # Start a fresh round. A user's previous ticket is removed so they can
+    # participate again in the next round.
+    conn.execute("DELETE FROM lottery_tickets")
+    conn.execute(
+        "UPDATE lottery_state SET draw_at=?, prize=? WHERE id=1",
+        (now + LOTTERY_PERIOD, LOTTERY_PRIZE),
+    )
+    conn.commit()
+    conn.close()
+    return winner_id, prize
+
+
+def lottery_text(user_id):
+    lottery_finish_round_if_needed()
+    draw_at, prize = lottery_state()
+    now = int(time.time())
+    remaining = max(0, draw_at - now)
+    hours = remaining // 3600
+    minutes = (remaining % 3600) // 60
+    seconds = remaining % 60
+
+    conn = db()
+    my_ticket = conn.execute(
+        "SELECT 1 FROM lottery_tickets WHERE user_id=?",
+        (user_id,),
+    ).fetchone()
+    total_tickets = conn.execute(
+        "SELECT COUNT(*) AS total FROM lottery_tickets"
+    ).fetchone()["total"]
+    conn.close()
+
     return (
-        "👷 کارگرها\n\n"
-        "📦 تعداد کارگرهای تو: 0 / 9\n"
-        "💰 درآمد جمع‌شده: 0 $\n\n"
-        "روی هر کارگر بزن تا جزئیات و دکمه خرید بیاد."
+        "لاتاری 🎟️\n\n"
+        f"💵 قیمت بلیت: {LOTTERY_TICKET_PRICE} $\n"
+        f"🏆 جایزه: {prize:,} $\n"
+        f"⏳ قرعه‌کشی بعدی: {hours} ساعت و {minutes} دقیقه و {seconds} ثانیه\n"
+        f"🎫 بلیت تو: {1 if my_ticket else 0} | کل بلیت‌ها: {int(total_tickets)}\n\n"
+        "⚠️ هر نفر فقط یک بلیت می‌تونه بخره."
     )
 
 
-def workers_keyboard(user_id):
-    rows = []
-    for key, title, income in WORKER_ITEMS:
-        rows.append([B(f"{title} — +{income:,}/۵س", key, "primary")])
-    rows.append([B("💰 برداشت درآمد کارگرها", "workers_collect", "success")])
-    rows.append([B("🔙 برگشت", "home", "primary")])
-    return InlineKeyboardMarkup(rows)
+def lottery_keyboard():
+    return InlineKeyboardMarkup([
+        [B("🎟️ خرید بلیت (1 عدد)", "lottery_buy:1", "success")],
+    ])
 
 
-def worker_detail_text(worker_id):
-    item = next((x for x in WORKER_ITEMS if x[0] == worker_id), None)
-    if not item:
-        return "❌ این کارگر پیدا نشد."
-    _, title, income = item
-    return (
-        f"{title}\n\n"
-        f"📈 درآمد: +{income:,} $ در هر ۵ ساعت\n"
-        "📦 ظرفیت: ۹ عدد\n\n"
-        "ℹ️ جزئیات خرید این کارگر هنوز در اطلاعات ارسالی مشخص نشده است."
+def buy_lottery_ticket(user_id):
+    lottery_finish_round_if_needed()
+    conn = db()
+    player = conn.execute(
+        "SELECT coins FROM players WHERE user_id=?",
+        (user_id,),
+    ).fetchone()
+    if not player:
+        conn.close()
+        return "❌ بازیکن پیدا نشد."
+
+    existing = conn.execute(
+        "SELECT 1 FROM lottery_tickets WHERE user_id=?",
+        (user_id,),
+    ).fetchone()
+    if existing:
+        conn.close()
+        return "❌ تو قبلاً یک بلیت برای این دوره خریدی."
+
+    if int(player["coins"]) < LOTTERY_TICKET_PRICE:
+        conn.close()
+        return f"❌ موجودی کافی نیست.\n💵 قیمت بلیت: {LOTTERY_TICKET_PRICE} $"
+
+    conn.execute(
+        "UPDATE players SET coins=coins-? WHERE user_id=?",
+        (LOTTERY_TICKET_PRICE, user_id),
     )
+    conn.execute(
+        "INSERT INTO lottery_tickets(user_id,purchased_at) VALUES(?,?)",
+        (user_id, int(time.time())),
+    )
+    conn.commit()
+    conn.close()
+    return "🎟️ بلیت با موفقیت خریداری شد!\n🍀 در قرعه‌کشی شرکت کردی."
+
+
+WHEEL_REWARDS = [100, 250, 500, 1_000, 2_500, 5_000, 10_000]
+WHEEL_COOLDOWN = 24 * 60 * 60
+
+
+def wheel_game(user_id):
+    now = int(time.time())
+    conn = db()
+    row = conn.execute(
+        "SELECT last_spin FROM wheel_spins WHERE user_id=?",
+        (user_id,),
+    ).fetchone()
+    last_spin = int(row["last_spin"] or 0) if row else 0
+    remaining = WHEEL_COOLDOWN - (now - last_spin)
+    if remaining > 0:
+        hours = remaining // 3600
+        minutes = (remaining % 3600) // 60
+        conn.close()
+        return (
+            "🎡 گردونه\n\n"
+            "گردونه امروزت قبلاً چرخیده.\n"
+            f"⏳ زمان باقی‌مانده: {hours} ساعت و {minutes} دقیقه"
+        )
+
+    reward = random.choice(WHEEL_REWARDS)
+    conn.execute(
+        "INSERT OR REPLACE INTO wheel_spins(user_id,last_spin) VALUES(?,?)",
+        (user_id, now),
+    )
+    conn.execute(
+        "UPDATE players SET coins=coins+? WHERE user_id=?",
+        (reward, user_id),
+    )
+    conn.commit()
+    conn.close()
+    return (
+        "🎡 گردونه\n\n"
+        "گردونه چرخید... 🎲\n"
+        f"نتیجه: 💵 +{reward:,} $ 💵"
+    )
+
 
 # -------------------- Trade --------------------
 
@@ -842,13 +909,13 @@ def run_dice(user_id, choice, amount):
             "UPDATE players SET coins=coins+? WHERE user_id=?",
             (amount, user_id)
         )
-        message = f"تاس {choice}\n🎰 تاس: {dice} ({actual}) — بردی! +<b>{amount:,}</b> $"
+        message = f"تاس {choice}\n🎰 تاس: {dice} ({actual}) — بردی! +{amount:,} $"
     else:
         conn.execute(
             "UPDATE players SET coins=coins-? WHERE user_id=?",
             (amount, user_id)
         )
-        message = f"تاس {choice}\n🎰 تاس: {dice} ({actual}) — باختی! -<b>{amount:,}</b> $"
+        message = f"تاس {choice}\n🎰 تاس: {dice} ({actual}) — باختی! -{amount:,} $"
 
     conn.commit()
     conn.close()
@@ -1327,70 +1394,67 @@ HELP_DETAILS = {
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
+    await q.answer()
     data = q.data
     user = q.from_user
 
     if data == "home":
-        await q.edit_message_text(home_text(user), reply_markup=main_menu(), parse_mode=ParseMode.HTML)
+        await q.edit_message_text(home_text(user), reply_markup=main_menu())
         return
 
     p = get_player(user)
 
-    if data == "lottery_join":
-        await q.answer(lottery_join(user.id), show_alert=True)
-        return
-
     if data == "profile":
         text = (
             f"👤 {p['name']}\n"
-            f"💵 موجودی: <b>{p['coins']:,}</b> $\n"
-            f"🏦 بانک: <b>{p['bank']:,}</b> $\n"
-            f"💰 مجموع: <b>{p['coins'] + p['bank']:,}</b> $\n"
+            f"💵 موجودی: {p['coins']:,} $\n"
+            f"🏦 بانک: {p['bank']:,} $\n"
+            f"💰 مجموع: {p['coins'] + p['bank']:,} $\n"
             f"🏷️ سطح: نوب (لول {p['level']})"
         )
-        await q.edit_message_text(text, reply_markup=back_menu(), parse_mode=ParseMode.HTML)
+        await q.edit_message_text(text, reply_markup=back_menu())
         return
 
     if data == "bank":
-        await q.edit_message_text(bank_text(user.id), reply_markup=bank_keyboard(), parse_mode=ParseMode.HTML)
+        await q.edit_message_text(bank_text(user.id), reply_markup=bank_keyboard())
         return
 
     if data.startswith("bank_deposit:"):
         amount = int(data.split(":")[1])
         ok, message = deposit_amount(user.id, amount)
         await q.answer(message, show_alert=True)
-        await q.edit_message_text(bank_text(user.id), reply_markup=bank_keyboard(), parse_mode=ParseMode.HTML)
+        await q.edit_message_text(bank_text(user.id), reply_markup=bank_keyboard())
         return
 
     if data == "bank_withdraw":
         message = withdraw_bank(user.id)
         await q.answer(message, show_alert=True)
-        await q.edit_message_text(bank_text(user.id), reply_markup=bank_keyboard(), parse_mode=ParseMode.HTML)
+        await q.edit_message_text(bank_text(user.id), reply_markup=bank_keyboard())
         return
 
-    if data == "workers":
+    if data == "lottery":
         await q.edit_message_text(
-            workers_text(user.id),
-            reply_markup=workers_keyboard(user.id)
+            lottery_text(user.id),
+            reply_markup=lottery_keyboard()
         )
         return
 
-    if data == "workers_collect":
-        await q.answer("ℹ️ هنوز درآمد کارگری برای برداشت ثبت نشده است.", show_alert=True)
+    if data == "lottery_buy:1":
+        message = buy_lottery_ticket(user.id)
+        await q.edit_message_text(
+            f"{message}\n\n{lottery_text(user.id)}",
+            reply_markup=lottery_keyboard()
+        )
         return
 
-    if data.startswith("worker_"):
-        if any(x[0] == data for x in WORKER_ITEMS):
-            await q.edit_message_text(
-                worker_detail_text(data),
-                reply_markup=InlineKeyboardMarkup([[B("برگشت 🔙", "workers", "primary")]])
-            )
-            return
+    if data == "wheel":
+        await q.edit_message_text(wheel_game(user.id), reply_markup=back_menu())
+        return
 
     if data == "income":
         await q.edit_message_text(
             income_text(user.id),
-            reply_markup=income_keyboard(user.id)
+            reply_markup=income_keyboard()
         )
         return
 
@@ -1403,7 +1467,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.answer(message, show_alert=True)
         await q.edit_message_text(
             income_text(user.id),
-            reply_markup=income_keyboard(user.id)
+            reply_markup=income_keyboard()
         )
         return
 
@@ -1415,7 +1479,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             income_detail_text(user.id, business_id),
             reply_markup=income_detail_keyboard(
                 business_id,
-                (int(income_row(user.id, business_id)["quantity"]) if income_row(user.id, business_id) else 0) < INCOME_CAPACITY
+                income_owned_count(user.id) < INCOME_CAPACITY
             )
         )
         return
@@ -1427,7 +1491,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 income_detail_text(user.id, business_id),
                 reply_markup=income_detail_keyboard(
                     business_id,
-                    (int(income_row(user.id, business_id)["quantity"]) if income_row(user.id, business_id) else 0) < INCOME_CAPACITY
+                    income_owned_count(user.id) < INCOME_CAPACITY
                 )
             )
         else:
@@ -1601,6 +1665,27 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text(clan_text(), reply_markup=clan_keyboard())
         return
 
+    if data == "hop_charge":
+        await q.edit_message_text(
+            hop_charge_text(user.id),
+            reply_markup=InlineKeyboardMarkup([
+                [B("🔋 تبدیل 50,000,000 هاپ → 50 شارژ", "hop_charge_convert", "success")],
+                [B("🔙 منو اصلی", "home", "primary")],
+            ])
+        )
+        return
+
+    if data == "hop_charge_convert":
+        message = convert_hop_to_charge(user.id)
+        await q.edit_message_text(
+            f"{message}\n\n{hop_charge_text(user.id)}",
+            reply_markup=InlineKeyboardMarkup([
+                [B("🔋 تبدیل 50,000,000 هاپ → 50 شارژ", "hop_charge_convert", "success")],
+                [B("🔙 منو اصلی", "home", "primary")],
+            ])
+        )
+        return
+
     if data.startswith("clan_") and data != "clan":
         await q.answer("این گزینه فعلاً به‌صورت راهنمای کلن نمایش داده می‌شود.", show_alert=True)
         await q.edit_message_text(clan_text(), reply_markup=clan_keyboard())
@@ -1668,179 +1753,9 @@ def redeem_gift_code(user_id, code):
 
     return (
         f"کد هدیه {code}\n"
-        f"💰 <b>{row['amount']:,}</b> $ دریافت کردی!"
+        f"💰 {row['amount']:,} $ دریافت کردی!"
     )
 
-
-
-# -------------------- 5-minute command cooldowns --------------------
-COOLDOWN_5_MIN = 5 * 60
-
-def check_command_cooldown(user_id, command):
-    now = int(time.time())
-    conn = db()
-    row = conn.execute(
-        "SELECT last_used FROM command_cooldowns WHERE user_id=? AND command=?",
-        (user_id, command)
-    ).fetchone()
-    if row and now - int(row["last_used"] or 0) < COOLDOWN_5_MIN:
-        remaining = COOLDOWN_5_MIN - (now - int(row["last_used"] or 0))
-        minutes = remaining // 60
-        seconds = remaining % 60
-        conn.close()
-        return False, f"❌ این دستور هر ۵ دقیقه یک‌بار قابل استفاده است.\n⏳ زمان باقی‌مانده: {minutes}:{seconds:02d}"
-    conn.execute(
-        "INSERT OR REPLACE INTO command_cooldowns(user_id,command,last_used) VALUES(?,?,?)",
-        (user_id, command, now)
-    )
-    conn.commit()
-    conn.close()
-    return True, ""
-
-
-def rob_user(thief_id, target_id):
-    if thief_id == target_id:
-        return "❌ نمی‌تونی از خودت دزدی کنی."
-    conn = db()
-    target = conn.execute("SELECT coins, name FROM players WHERE user_id=?", (target_id,)).fetchone()
-    if not target:
-        conn.close()
-        return "❌ کاربر موردنظر پیدا نشد."
-    amount = int(target["coins"] * 0.10)
-    if amount <= 0:
-        conn.close()
-        return "❌ پول نقد قابل سرقتی ندارد."
-    conn.execute("UPDATE players SET coins=coins-? WHERE user_id=?", (amount, target_id))
-    conn.execute("UPDATE players SET coins=coins+? WHERE user_id=?", (amount, thief_id))
-    conn.commit(); conn.close()
-    return f"🥷 دزدی موفق شد!\n💰 {amount:,} $ از {target['name']} به دست آوردی."
-
-
-def hire_attack(hirer_id, target_id, kind):
-    if hirer_id == target_id:
-        return "❌ نمی‌تونی خودت را هدف بگیری."
-    cost = 200_000 if kind == "قاتل" else 400_000
-    # Since no separate penalty amount was specified, the default penalty is the same as the contract cost.
-    penalty = cost
-    conn = db()
-    hirer = conn.execute("SELECT coins FROM players WHERE user_id=?", (hirer_id,)).fetchone()
-    target = conn.execute("SELECT coins, bank, name FROM players WHERE user_id=?", (target_id,)).fetchone()
-    if not hirer or hirer["coins"] < cost:
-        conn.close()
-        return f"❌ برای اجیر {kind} باید {cost:,} $ پول نقد داشته باشی."
-    if not target:
-        conn.close()
-        return "❌ کاربر موردنظر پیدا نشد."
-
-    conn.execute("UPDATE players SET coins=coins-? WHERE user_id=?", (cost, hirer_id))
-    success = random.random() < 0.60
-    if success:
-        stolen = int(target["coins"] if kind == "قاتل" else target["bank"])
-        if stolen > 0:
-            if kind == "قاتل":
-                conn.execute("UPDATE players SET coins=coins-? WHERE user_id=?", (stolen, target_id))
-                conn.execute("UPDATE players SET coins=coins+? WHERE user_id=?", (stolen, hirer_id))
-            else:
-                conn.execute("UPDATE players SET bank=bank-? WHERE user_id=?", (stolen, target_id))
-                conn.execute("UPDATE players SET coins=coins+? WHERE user_id=?", (stolen, hirer_id))
-        conn.commit(); conn.close()
-        source = "موجودی" if kind == "قاتل" else "بانک"
-        return f"🕶️ اجیر {kind} موفق شد!\n🎯 هدف: {target['name']}\n💰 {stolen:,} $ از {source} به دستت رسید."
-
-    conn.execute("UPDATE players SET coins=coins-? WHERE user_id=? AND coins>=?", (penalty, hirer_id, penalty))
-    conn.commit(); conn.close()
-    return f"🚨 اجیر {kind} لو رفت!\n💸 {penalty:,} $ جریمه پرداخت کردی."
-
-
-def play_slide(user_id, amount):
-    # Slide uses the same stake flow as dice; the exact special Slide rules were not specified.
-    return run_dice(user_id, "زوج", amount)
-
-# -------------------- Lottery / Wheel / Family --------------------
-def lottery_text():
-    return "🎟 لاتاری\n\nبا زدن دکمه زیر وارد قرعه کشی شو. هر شرکت یک بلیت است."
-
-def lottery_keyboard():
-    return InlineKeyboardMarkup([[B("🟢 شرکت در لاتاری", "lottery_join", "success")],[B("🔙 منو", "home")]])
-
-def lottery_join(user_id):
-    conn=db()
-    win=random.choice([True,False,False])
-    if win:
-        amount=random.randint(1000,10000)
-        conn.execute("UPDATE players SET coins=coins+? WHERE user_id=?",(amount,user_id))
-        msg=f"🎉 برنده شدی! +{amount:,} $"
-    else:
-        msg="❌ این بار برنده نشدی. دفعه بعد شانس بیار!"
-    conn.commit(); conn.close(); return msg
-
-def wheel_play(user_id):
-    prizes=[1000,5000,10000,50000,100000]
-    amount=random.choice(prizes)
-    conn=db(); conn.execute("UPDATE players SET coins=coins+? WHERE user_id=?",(amount,user_id)); conn.commit(); conn.close()
-    return f"🎡 گردونه چرخید\n🎁 جایزه: {amount:,} $"
-
-def marry(user_id, partner_id):
-    conn = db()
-    me = conn.execute("SELECT name FROM players WHERE user_id=?", (user_id,)).fetchone()
-    partner = conn.execute("SELECT name FROM players WHERE user_id=?", (partner_id,)).fetchone()
-    my_name = me[0] if me and me[0] else str(user_id)
-    partner_name = partner[0] if partner and partner[0] else str(partner_id)
-    conn.execute("INSERT OR REPLACE INTO marriages(user_id,partner_id) VALUES(?,?)", (user_id, partner_id))
-    conn.execute("INSERT OR REPLACE INTO marriages(user_id,partner_id) VALUES(?,?)", (partner_id, user_id))
-    conn.commit()
-    conn.close()
-    return f"💍 {partner_name} با {my_name} ازدواج کرد!\n🎉\n💜 مبارکه! زندگی خوبی داشته باشین"
-
-
-def relationship_action(user_id):
-    ok, message = check_command_cooldown(user_id, "رابطه")
-    if not ok:
-        return message
-    conn = db()
-    row = conn.execute("SELECT partner_id FROM marriages WHERE user_id=?", (user_id,)).fetchone()
-    if not row:
-        conn.close()
-        return "❌ برای رابطه باید متأهل باشی."
-    partner_id = row["partner_id"]
-    conn.execute("UPDATE players SET coins = coins + 250 WHERE user_id=?", (user_id,))
-    conn.execute("UPDATE players SET coins = coins + 250 WHERE user_id=?", (partner_id,))
-    conn.commit(); conn.close()
-    return family_relationship_text(user_id)
-
-
-def betrayal(user_id):
-    ok, message = check_command_cooldown(user_id, "خیانت")
-    if not ok:
-        return message
-    conn = db()
-    row = conn.execute("SELECT partner_id FROM marriages WHERE user_id=?", (user_id,)).fetchone()
-    if not row:
-        conn.close()
-        return "❌ برای خیانت باید متأهل باشی."
-    conn.execute("UPDATE players SET coins = coins + 500 WHERE user_id=?", (user_id,))
-    conn.commit(); conn.close()
-    return "😈 مخفیانه خیانت کرد و 500 $ گرفت. کسی نفهمید... فعلاً"
-
-def divorce(user_id):
-    conn = db()
-    row = conn.execute("SELECT partner_id FROM marriages WHERE user_id=?", (user_id,)).fetchone()
-    if not row:
-        conn.close()
-        return "❌ شما ازدواج نکرده‌اید."
-    partner_id = row[0]
-    me = conn.execute("SELECT coins FROM players WHERE user_id=?", (user_id,)).fetchone()
-    if not me or me[0] < 500:
-        conn.close()
-        return "❌ برای طلاق باید 500 $ مهریه داشته باشی."
-    conn.execute("UPDATE players SET coins = coins - 500 WHERE user_id=?", (user_id,))
-    conn.execute("UPDATE players SET coins = coins + 500 WHERE user_id=?", (partner_id,))
-    conn.execute("DELETE FROM marriages WHERE user_id IN (?,?)", (user_id, partner_id))
-    conn.commit()
-    partner = conn.execute("SELECT name FROM players WHERE user_id=?", (partner_id,)).fetchone()
-    partner_name = partner[0] if partner else str(partner_id)
-    conn.close()
-    return f"💔 از {partner_name} طلاق گرفت و 500 $ مهریه پرداخت کرد."
 
 # -------------------- Text commands --------------------
 
@@ -1872,17 +1787,23 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await start(update, context)
         return
 
-    if text == "کارگرها":
+    if text == "لاتاری":
+        get_player(user)
         await update.message.reply_text(
-            workers_text(user.id),
-            reply_markup=workers_keyboard(user.id)
+            lottery_text(user.id),
+            reply_markup=lottery_keyboard()
         )
+        return
+
+    if text == "گردونه":
+        get_player(user)
+        await update.message.reply_text(wheel_game(user.id))
         return
 
     if text in {"کسب درآمد", "کسب درآمدها"}:
         await update.message.reply_text(
             income_text(user.id),
-            reply_markup=income_keyboard(user.id)
+            reply_markup=income_keyboard()
         )
         return
 
@@ -1890,11 +1811,10 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         p = get_player(user)
         await update.message.reply_text(
             f"👤 {p['name']}\n"
-            f"💲 موجودی: <b>{p['coins']:,}</b> $\n"
-            f"🏦 بانک: <b>{p['bank']:,}</b> $\n"
-            f"💰 مجموع: <b>{p['coins'] + p['bank']:,}</b> $\n"
-            f"🏷️ سطح: نوب (لول {p['level']})",
-            parse_mode=ParseMode.HTML
+            f"💲 موجودی: {p['coins']:,} $\n"
+            f"🏦 بانک: {p['bank']:,} $\n"
+            f"💰 مجموع: {p['coins'] + p['bank']:,} $\n"
+            f"🏷️ سطح: نوب (لول {p['level']})"
         )
         return
 
@@ -1915,33 +1835,13 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(message)
         return
 
-    if text == "لاتاری":
-        await update.message.reply_text(lottery_text(), reply_markup=lottery_keyboard())
-        return
-
-    if text == "گردونه":
-        await update.message.reply_text(wheel_play(user.id))
-        return
-
-    if text == "ازدواج" and update.message.reply_to_message:
-        await update.message.reply_text(marry(user.id, update.message.reply_to_message.from_user.id))
-        return
-
-    if text == "خیانت":
-        await update.message.reply_text(betrayal(user.id))
-        return
-
-    if text == "طلاق":
-        await update.message.reply_text(divorce(user.id))
-        return
-
     # Gift code command: کد هدیه CODE
     if text.startswith("کد هدیه "):
         code = text.replace("کد هدیه ", "", 1).strip()
         if not code:
             await update.message.reply_text("❌ فرمت: کد هدیه + کد")
             return
-        await update.message.reply_text(redeem_gift_code(user.id, code), parse_mode=ParseMode.HTML)
+        await update.message.reply_text(redeem_gift_code(user.id, code))
         return
 
     # Transfer command: reply to another user's message and write: انتقال 100
@@ -1967,9 +1867,8 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await update.message.reply_text(
             f"انتقال {amount}\n"
-            f"انتقال <b>{amount:,}</b> $ از {sender['name']} به {receiver['name']} ✔️\n"
-            f"یافت.",
-            parse_mode=ParseMode.HTML
+            f"انتقال $ {amount:,} از {sender['name']} به {receiver['name']} ✔️\n"
+            f"یافت."
         )
         return
 
@@ -1979,8 +1878,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parts = text.split()
         if len(parts) == 3 and parts[1] == "زوج" and parts[2].isdigit():
             await update.message.reply_text(
-                run_dice(user.id, "زوج", int(parts[2])),
-                parse_mode=ParseMode.HTML
+                run_dice(user.id, "زوج", int(parts[2]))
             )
         else:
             await update.message.reply_text(
@@ -1998,75 +1896,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ فرمت: ترید + مبلغ\nمثال: ترید 1000")
         return
 
-    if text == "رابطه":
-        await update.message.reply_text(relationship_action(user.id))
-        return
-
-    if text == "جق":
-        ok, message = check_command_cooldown(user.id, "جق")
-        if ok:
-            conn = db(); conn.execute("UPDATE players SET coins=coins+500 WHERE user_id=?", (user.id,)); conn.commit(); conn.close()
-            message = "💰 500 $ گرفتی!"
-        await update.message.reply_text(message)
-        return
-
-    if text == "هاپ":
-        ok, message = check_command_cooldown(user.id, "هاپ")
-        if ok:
-            conn = db(); conn.execute("UPDATE players SET coins=coins+500 WHERE user_id=?", (user.id,)); conn.commit(); conn.close()
-            message = "💰 500 $ گرفتی!"
-        await update.message.reply_text(message)
-        return
-
-    if text == "دزدی":
-        if not update.message.reply_to_message or not update.message.reply_to_message.from_user:
-            await update.message.reply_text("❌ باید روی پیام کاربر موردنظر ریپلای کنی.")
-            return
-        ok, message = check_command_cooldown(user.id, "دزدی")
-        if not ok:
-            await update.message.reply_text(message)
-            return
-        target_user = update.message.reply_to_message.from_user
-        await update.message.reply_text(rob_user(user.id, target_user.id))
-        return
-
-    if text.startswith("اسلایت "):
-        parts = text.split()
-        if len(parts) == 2 and parts[1].isdigit():
-            await update.message.reply_text(play_slide(user.id, int(parts[1])), parse_mode=ParseMode.HTML)
-        else:
-            await update.message.reply_text("❌ فرمت درست: اسلایت + مبلغ")
-        return
-
-    if text == "اجیر قاتل" or text == "اجیر قاتل ":
-        if not update.message.reply_to_message or not update.message.reply_to_message.from_user:
-            await update.message.reply_text("❌ باید روی پیام کاربر موردنظر ریپلای کنی.")
-            return
-        ok, message = check_command_cooldown(user.id, "اجیر قاتل")
-        if not ok:
-            await update.message.reply_text(message)
-            return
-        target_user = update.message.reply_to_message.from_user
-        await update.message.reply_text(hire_attack(user.id, target_user.id, "قاتل"))
-        return
-
-    if text == "اجیر هکر" or text == "اجیر هکر ":
-        if not update.message.reply_to_message or not update.message.reply_to_message.from_user:
-            await update.message.reply_text("❌ باید روی پیام کاربر موردنظر ریپلای کنی.")
-            return
-        ok, message = check_command_cooldown(user.id, "اجیر هکر")
-        if not ok:
-            await update.message.reply_text(message)
-            return
-        target_user = update.message.reply_to_message.from_user
-        await update.message.reply_text(hire_attack(user.id, target_user.id, "هکر"))
-        return
-
     # Crypto buy command: خرید 0.5 بیتکوین
-    if text in {"بچه ها", "بچه‌ها", "لیست بچه ها", "لیست بچه‌ها"}:
-        await update.message.reply_text(family_children_text(user.id))
-        return
-
     if text.startswith("خرید "):
         parts = text.split(maxsplit=2)
         if len(parts) == 3:
@@ -2127,14 +1957,9 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(buy_black_market(user.id, item_id))
         return
 
-    # In groups, ignore ordinary/unknown messages completely so the bot
-    # does not interrupt normal conversations. Unknown text is only reported
-    # in private chats.
-    if update.effective_chat and update.effective_chat.type in {"group", "supergroup"}:
-        return
-
     await update.message.reply_text(
-        "❌ این دستور در ربات تعریف نشده است."
+        "دستور را نشناختم. برای دیدن منوی OceanGame بنویس: منو",
+        reply_markup=main_menu()
     )
 
 
@@ -2143,8 +1968,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         home_text(update.effective_user),
-        reply_markup=main_menu(),
-        parse_mode=ParseMode.HTML
+        reply_markup=main_menu()
     )
 
 
