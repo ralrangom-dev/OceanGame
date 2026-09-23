@@ -85,7 +85,8 @@ def init_db():
             code TEXT PRIMARY KEY,
             amount INTEGER NOT NULL,
             redeemed_by INTEGER,
-            redeemed_at INTEGER
+            redeemed_at INTEGER,
+            max_users INTEGER NOT NULL DEFAULT 1
         )
     """)
 
@@ -136,15 +137,27 @@ def init_db():
     if "charges" not in columns:
         conn.execute("ALTER TABLE players ADD COLUMN charges INTEGER NOT NULL DEFAULT 0")
 
-    # Gift codes: each code can be redeemed only once.
-    conn.execute(
-        "INSERT OR IGNORE INTO gift_codes(code, amount) VALUES(?, ?)",
-        ("OCEAN60M-X7K2P9", 60_000_000),
-    )
-    conn.execute(
-        "INSERT OR IGNORE INTO gift_codes(code, amount) VALUES(?, ?)",
-        ("OCEAN600M-Q4N8ZT", 600_000_000),
-    )
+    # Gift codes: old codes are replaced with new codes.
+    # The third code can be redeemed by up to 3 different users.
+    gift_columns = {row["name"] for row in conn.execute("PRAGMA table_info(gift_codes)").fetchall()}
+    if "max_users" not in gift_columns:
+        conn.execute("ALTER TABLE gift_codes ADD COLUMN max_users INTEGER NOT NULL DEFAULT 1")
+
+    # Remove the previous public codes so they can no longer be redeemed.
+    conn.execute("DELETE FROM gift_codes WHERE code IN (?, ?)", (
+        "OCEAN60M-X7K2P9", "OCEAN600M-Q4N8ZT"
+    ))
+
+    gift_codes = [
+        ("OCEAN100M-A7K4P2", 60_000_000, 1),
+        ("OCEAN600M-B8N5ZT", 600_000_000, 1),
+        ("OCEAN100M-3USERS", 100_000_000, 3),
+    ]
+    for code, amount, max_users in gift_codes:
+        conn.execute(
+            "INSERT OR IGNORE INTO gift_codes(code, amount, max_users) VALUES(?, ?, ?)",
+            (code, amount, max_users),
+        )
 
     # Give every existing player a one-time 5,000$ starting bonus.
     rows = conn.execute("SELECT user_id FROM players WHERE starter_bonus_given=0").fetchall()
@@ -383,9 +396,9 @@ CHARGE_REWARD = 50
 def hop_charge_text(user_id):
     p = get_player_raw(user_id)
     return (
-        "📶 تبدیل هاپ به شارژ\n\n"
+        "🔋 تبدیل هاپ به شارژ\n\n"
         f"💰 هاپ موجود: {p['coins']:,} $\n"
-        f"📶 شارژ فعلی: {p['charges']:,}\n\n"
+        f"🔋 شارژ فعلی: {p['charges']:,}\n\n"
         "📌 هر 50,000,000 هاپ = 50 شارژ\n"
         "برای تبدیل، دکمه زیر را بزن."
     )
@@ -411,7 +424,7 @@ def convert_hop_to_charge(user_id):
     )
     conn.commit()
     conn.close()
-    return f"✅ تبدیل انجام شد!\n💰 {hop_amount:,} هاپ → 📶 {charge_amount:,} شارژ"
+    return f"✅ تبدیل انجام شد!\n💰 {hop_amount:,} هاپ → 🔋 {charge_amount:,} شارژ"
 
 
 # -------------------- Main menu --------------------
@@ -437,7 +450,7 @@ def main_menu():
         ],
         [B("🕸️ دارک وب", "dark_web", "primary")],
         [B("🏳️ کلن", "clan", "primary")],
-        [B("📶 تبدیل هاپ به شارژ", "hop_charge", "primary")],
+        [B("🔋 تبدیل هاپ به شارژ", "hop_charge", "primary")],
         [B("➕ افزودن ربات به گروه", "add_group", "success")],
     ])
 def home_text(user):
@@ -1797,7 +1810,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "hop_charge":
         await q.edit_message_text(
-            "📶 تبدیل هاپ به شارژ\n\n"
+            "🔋 تبدیل هاپ به شارژ\n\n"
             "📱 اپراتور خود را انتخاب کن:",
             reply_markup=InlineKeyboardMarkup([
                 [B("ایرانسل", "charge_irancell", "primary")],
@@ -1808,76 +1821,12 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    if data in {"charge_irancell", "charge_mci", "charge_rightel"}:
-        operator_names = {
-            "charge_irancell": "ایرانسل",
-            "charge_mci": "همراه اول",
-            "charge_rightel": "رایتل",
-        }
-        operator = operator_names[data]
-        p = get_player_raw(user.id)
-        text = (
-            f"📱 اپراتور: {operator}\n\n"
-            f"📶 موجودی شارژ: {p['charges']:,}\n"
-            f"💰 موجودی سکه بازی: {p['coins']:,} $"
-        )
-        await q.edit_message_text(
-            text,
-            reply_markup=InlineKeyboardMarkup([
-                [B("📶 تبدیل 50,000,000 به شارژ", f"charge_convert:{data}", "success")],
-                [B("📤 برداشت شارژ", f"charge_withdraw:{data}", "primary")],
-                [B("🔙 برگشت", "hop_charge", "primary")],
-            ])
-        )
-        return
-
-    if data.startswith("charge_convert:"):
-        operator_key = data.split(":", 1)[1]
-        message = convert_hop_to_charge(user.id)
-        operator_names = {
-            "charge_irancell": "ایرانسل",
-            "charge_mci": "همراه اول",
-            "charge_rightel": "رایتل",
-        }
-        operator = operator_names.get(operator_key, "اپراتور")
-        p = get_player_raw(user.id)
-        text = (
-            f"📱 اپراتور: {operator}\n\n"
-            f"{message}\n\n"
-            f"📶 موجودی شارژ: {p['charges']:,}\n"
-            f"💰 موجودی سکه بازی: {p['coins']:,} $"
-        )
-        await q.edit_message_text(
-            text,
-            reply_markup=InlineKeyboardMarkup([
-                [B("📶 تبدیل 50,000,000 به شارژ", f"charge_convert:{operator_key}", "success")],
-                [B("📤 برداشت شارژ", f"charge_withdraw:{operator_key}", "primary")],
-                [B("🔙 برگشت", "hop_charge", "primary")],
-            ])
-        )
-        return
-
-    if data.startswith("charge_withdraw:"):
-        operator_key = data.split(":", 1)[1]
-        operator_names = {
-            "charge_irancell": "ایرانسل",
-            "charge_mci": "همراه اول",
-            "charge_rightel": "رایتل",
-        }
-        operator = operator_names.get(operator_key, "اپراتور")
-        p = get_player_raw(user.id)
-        await q.answer(
-            f"📤 موجودی قابل برداشت برای {operator}: {p['charges']:,} شارژ",
-            show_alert=True
-        )
-        return
-
     if data == "hop_charge_convert":
         message = convert_hop_to_charge(user.id)
         await q.edit_message_text(
             f"{message}\n\n{hop_charge_text(user.id)}",
             reply_markup=InlineKeyboardMarkup([
-                [B("📶 تبدیل 50,000,000 هاپ → 50 شارژ", "hop_charge_convert", "success")],
+                [B("🔋 تبدیل 50,000,000 هاپ → 50 شارژ", "hop_charge_convert", "success")],
                 [B("🔙 منو اصلی", "home", "primary")],
             ])
         )
@@ -1918,8 +1867,9 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # -------------------- Gift codes --------------------
 
 GIFT_CODES = {
-    "OCEAN60M-X7K2P9": 60_000_000,
-    "OCEAN600M-Q4N8ZT": 600_000_000,
+    "OCEAN100M-A7K4P2": 60_000_000,
+    "OCEAN600M-B8N5ZT": 600_000_000,
+    "OCEAN100M-3USERS": 100_000_000,
 }
 
 
@@ -1927,30 +1877,61 @@ def redeem_gift_code(user_id, code):
     code = code.strip().upper()
     conn = db()
     row = conn.execute(
-        "SELECT code, amount, redeemed_by FROM gift_codes WHERE code=?",
+        "SELECT code, amount, redeemed_by, redeemed_at, max_users FROM gift_codes WHERE code=?",
         (code,),
     ).fetchone()
     if row is None:
         conn.close()
         return "❌ کد هدیه نامعتبر است."
-    if row["redeemed_by"] is not None:
-        conn.close()
-        return "❌ این کد هدیه قبلاً استفاده شده است."
 
+    # Keep the existing single-user fields for compatibility, and use
+    # a separate redemption table for multi-user gift codes.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS gift_code_redemptions (
+            code TEXT NOT NULL,
+            user_id INTEGER NOT NULL,
+            redeemed_at INTEGER NOT NULL,
+            PRIMARY KEY (code, user_id)
+        )
+    """)
+    already = conn.execute(
+        "SELECT 1 FROM gift_code_redemptions WHERE code=? AND user_id=?",
+        (code, user_id),
+    ).fetchone()
+    if already:
+        conn.close()
+        return "❌ تو قبلاً از این کد هدیه استفاده کردی."
+
+    used = conn.execute(
+        "SELECT COUNT(*) AS total FROM gift_code_redemptions WHERE code=?",
+        (code,),
+    ).fetchone()["total"]
+    max_users = int(row["max_users"] or 1)
+    if used >= max_users:
+        conn.close()
+        return "❌ ظرفیت استفاده از این کد هدیه تکمیل شده است."
+
+    now = int(time.time())
     conn.execute(
         "UPDATE players SET coins = coins + ? WHERE user_id=?",
         (row["amount"], user_id),
     )
     conn.execute(
-        "UPDATE gift_codes SET redeemed_by=?, redeemed_at=? WHERE code=? AND redeemed_by IS NULL",
-        (user_id, int(time.time()), code),
+        "INSERT INTO gift_code_redemptions(code,user_id,redeemed_at) VALUES(?,?,?)",
+        (code, user_id, now),
     )
+    if max_users == 1:
+        conn.execute(
+            "UPDATE gift_codes SET redeemed_by=?, redeemed_at=? WHERE code=? AND redeemed_by IS NULL",
+            (user_id, now, code),
+        )
     conn.commit()
     conn.close()
 
     return (
-        f"کد هدیه {code}\n"
-        f"💰 {row['amount']:,} $ دریافت کردی!"
+        f"🎁 کد هدیه: {code}\n"
+        f"💰 {row['amount']:,} $ دریافت کردی!\n"
+        f"👥 ظرفیت: {used + 1}/{max_users}"
     )
 
 
